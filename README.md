@@ -1,6 +1,22 @@
-# Visionarr
+<p align="center">
+  <img src="assets/icon.png" alt="Visionarr Logo" width="200">
+</p>
 
-A standalone daemon that monitors Radarr/Sonarr for new imports, detects media with Dolby Vision Profile 7, and automatically converts it to Profile 8 for better device compatibility.
+<h1 align="center">Visionarr</h1>
+
+<p align="center">
+  <strong>Automatic Dolby Vision Profile 7 → Profile 8 Converter</strong><br>
+  A daemon that monitors Radarr/Sonarr for new imports and converts DoVi for better device compatibility.
+</p>
+
+<p align="center">
+  <a href="#why">Why?</a> •
+  <a href="#how-it-works">How It Works</a> •
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#features">Features</a>
+</p>
+
+---
 
 ## Why?
 

@@ -1,0 +1,306 @@
+"""
+Visionarr State Management
+
+SQLite database for tracking processed files to prevent reprocessing.
+Unlike Unpackerr, file paths don't change after conversion, so we must
+track what's been processed.
+"""
+
+import json
+import sqlite3
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Generator, List, Optional
+
+
+@dataclass
+class ProcessedFile:
+    """Record of a successfully processed file."""
+    id: int
+    file_path: str
+    original_profile: str
+    new_profile: str
+    processed_at: datetime
+    file_size_bytes: int
+
+
+@dataclass
+class FailedFile:
+    """Record of a failed processing attempt."""
+    id: int
+    file_path: str
+    error_message: str
+    failed_at: datetime
+    retry_count: int
+
+
+class StateDB:
+    """SQLite-based state tracking for processed files."""
+    
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
+        self._init_db()
+    
+    def _init_db(self) -> None:
+        """Initialize database schema if not exists."""
+        with self._get_connection() as conn:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS processed_files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_path TEXT UNIQUE NOT NULL,
+                    original_profile TEXT NOT NULL,
+                    new_profile TEXT NOT NULL,
+                    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    file_size_bytes INTEGER NOT NULL
+                );
+                
+                CREATE TABLE IF NOT EXISTS failed_files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_path TEXT UNIQUE NOT NULL,
+                    error_message TEXT NOT NULL,
+                    failed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    retry_count INTEGER DEFAULT 0
+                );
+                
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_processed_path ON processed_files(file_path);
+                CREATE INDEX IF NOT EXISTS idx_failed_path ON failed_files(file_path);
+            """)
+    
+    @contextmanager
+    def _get_connection(self) -> Generator[sqlite3.Connection, None, None]:
+        """Get a database connection with row factory."""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+    
+    # -------------------------------------------------------------------------
+    # Processed Files
+    # -------------------------------------------------------------------------
+    
+    def is_processed(self, file_path: str) -> bool:
+        """Check if a file has already been processed."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT 1 FROM processed_files WHERE file_path = ?",
+                (file_path,)
+            )
+            return cursor.fetchone() is not None
+    
+    def mark_processed(
+        self,
+        file_path: str,
+        original_profile: str,
+        new_profile: str,
+        file_size_bytes: int
+    ) -> None:
+        """Mark a file as successfully processed."""
+        with self._get_connection() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO processed_files 
+                (file_path, original_profile, new_profile, file_size_bytes, processed_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """, (file_path, original_profile, new_profile, file_size_bytes))
+            
+            # Remove from failed if it was there
+            conn.execute("DELETE FROM failed_files WHERE file_path = ?", (file_path,))
+    
+    def get_processed_files(self, limit: int = 100) -> List[ProcessedFile]:
+        """Get list of processed files, most recent first."""
+        with self._get_connection() as conn:
+            cursor = conn.execute("""
+                SELECT id, file_path, original_profile, new_profile, processed_at, file_size_bytes
+                FROM processed_files
+                ORDER BY processed_at DESC
+                LIMIT ?
+            """, (limit,))
+            
+            return [
+                ProcessedFile(
+                    id=row["id"],
+                    file_path=row["file_path"],
+                    original_profile=row["original_profile"],
+                    new_profile=row["new_profile"],
+                    processed_at=datetime.fromisoformat(row["processed_at"]),
+                    file_size_bytes=row["file_size_bytes"]
+                )
+                for row in cursor.fetchall()
+            ]
+    
+    def clear_processed(self, file_path: str) -> bool:
+        """Remove a single file from processed list (allows reprocessing)."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "DELETE FROM processed_files WHERE file_path = ?",
+                (file_path,)
+            )
+            return cursor.rowcount > 0
+    
+    def clear_all_processed(self) -> int:
+        """Clear all processed records. Returns count of deleted rows."""
+        with self._get_connection() as conn:
+            cursor = conn.execute("DELETE FROM processed_files")
+            return cursor.rowcount
+    
+    # -------------------------------------------------------------------------
+    # Failed Files
+    # -------------------------------------------------------------------------
+    
+    def is_failed(self, file_path: str) -> Optional[FailedFile]:
+        """Check if a file has failed processing. Returns failure record or None."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM failed_files WHERE file_path = ?",
+                (file_path,)
+            )
+            row = cursor.fetchone()
+            if row:
+                return FailedFile(
+                    id=row["id"],
+                    file_path=row["file_path"],
+                    error_message=row["error_message"],
+                    failed_at=datetime.fromisoformat(row["failed_at"]),
+                    retry_count=row["retry_count"]
+                )
+            return None
+    
+    def mark_failed(self, file_path: str, error_message: str) -> None:
+        """Mark a file as failed. Increments retry count if already failed."""
+        with self._get_connection() as conn:
+            # Check if already failed
+            cursor = conn.execute(
+                "SELECT retry_count FROM failed_files WHERE file_path = ?",
+                (file_path,)
+            )
+            existing = cursor.fetchone()
+            
+            if existing:
+                conn.execute("""
+                    UPDATE failed_files 
+                    SET error_message = ?, failed_at = CURRENT_TIMESTAMP, retry_count = retry_count + 1
+                    WHERE file_path = ?
+                """, (error_message, file_path))
+            else:
+                conn.execute("""
+                    INSERT INTO failed_files (file_path, error_message)
+                    VALUES (?, ?)
+                """, (file_path, error_message))
+    
+    def get_failed_files(self, limit: int = 100) -> List[FailedFile]:
+        """Get list of failed files, most recent first."""
+        with self._get_connection() as conn:
+            cursor = conn.execute("""
+                SELECT id, file_path, error_message, failed_at, retry_count
+                FROM failed_files
+                ORDER BY failed_at DESC
+                LIMIT ?
+            """, (limit,))
+            
+            return [
+                FailedFile(
+                    id=row["id"],
+                    file_path=row["file_path"],
+                    error_message=row["error_message"],
+                    failed_at=datetime.fromisoformat(row["failed_at"]),
+                    retry_count=row["retry_count"]
+                )
+                for row in cursor.fetchall()
+            ]
+    
+    def clear_failed(self, file_path: Optional[str] = None) -> int:
+        """Clear failed records. If file_path is None, clears all."""
+        with self._get_connection() as conn:
+            if file_path:
+                cursor = conn.execute(
+                    "DELETE FROM failed_files WHERE file_path = ?",
+                    (file_path,)
+                )
+            else:
+                cursor = conn.execute("DELETE FROM failed_files")
+            return cursor.rowcount
+    
+    # -------------------------------------------------------------------------
+    # Export/Import
+    # -------------------------------------------------------------------------
+    
+    def export_to_json(self) -> str:
+        """Export database to JSON for backup/debugging."""
+        with self._get_connection() as conn:
+            processed = conn.execute("SELECT * FROM processed_files").fetchall()
+            failed = conn.execute("SELECT * FROM failed_files").fetchall()
+            
+            data = {
+                "exported_at": datetime.now().isoformat(),
+                "processed_files": [dict(row) for row in processed],
+                "failed_files": [dict(row) for row in failed]
+            }
+            
+            return json.dumps(data, indent=2, default=str)
+    
+    def get_stats(self) -> dict:
+        """Get database statistics."""
+        with self._get_connection() as conn:
+            processed_count = conn.execute(
+                "SELECT COUNT(*) FROM processed_files"
+            ).fetchone()[0]
+            
+            failed_count = conn.execute(
+                "SELECT COUNT(*) FROM failed_files"
+            ).fetchone()[0]
+            
+            total_bytes = conn.execute(
+                "SELECT COALESCE(SUM(file_size_bytes), 0) FROM processed_files"
+            ).fetchone()[0]
+            
+            return {
+                "processed_count": processed_count,
+                "failed_count": failed_count,
+                "total_bytes_processed": total_bytes
+            }
+    
+    # -------------------------------------------------------------------------
+    # Initial Setup / First Run Protection
+    # -------------------------------------------------------------------------
+    
+    @property
+    def is_initial_setup_complete(self) -> bool:
+        """
+        Check if initial setup has been completed.
+        
+        On first run (new database), this returns False.
+        The daemon will NOT auto-convert until the user runs manual mode
+        and confirms the initial batch of detected files.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT value FROM settings WHERE key = 'initial_setup_complete'"
+            )
+            row = cursor.fetchone()
+            return row is not None and row[0] == "true"
+    
+    def mark_initial_setup_complete(self) -> None:
+        """Mark that initial setup has been completed via manual mode."""
+        with self._get_connection() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO settings (key, value)
+                VALUES ('initial_setup_complete', 'true')
+            """)
+    
+    def reset_initial_setup(self) -> None:
+        """Reset initial setup flag (for testing or re-verification)."""
+        with self._get_connection() as conn:
+            conn.execute("DELETE FROM settings WHERE key = 'initial_setup_complete'")
+

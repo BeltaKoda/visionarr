@@ -37,7 +37,7 @@ Profile 7 MKV → Extract HEVC → Convert RPU Metadata → Remux → Profile 8 
 - 🔄 **Daemon Mode** - Automatic polling of Radarr/Sonarr for new imports
 - 🖥️ **Manual Mode** - Interactive console for one-off conversions
 - 🛡️ **Atomic Safety** - Original files backed up before replacement
-- 📊 **State Tracking** - SQLite database prevents reprocessing
+- 📊 **State Tracking** - SQLite database prevents reprocessing (unlike Unpackerr, file paths don't change after conversion, so we must track what's been processed)
 - 🔔 **Notifications** - Optional Discord/Slack webhooks
 - 🐳 **Docker Ready** - Includes Unraid template
 

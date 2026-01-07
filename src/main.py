@@ -371,13 +371,23 @@ class Visionarr:
     
     def _manual_scan_library(self) -> None:
         """Scan entire library - heavy operation."""
-        confirm = input("\n⚠️  This can take a LONG time. Continue? (y/n): ").strip().lower()
-        if confirm != "y":
-            return
-        
         print("\n" + "=" * 50)
         print("FULL LIBRARY SCAN")
         print("=" * 50)
+        
+        # Ask for file limit
+        limit_input = input("\nMax files to scan (Enter for all, or number for testing): ").strip()
+        max_files = None
+        if limit_input:
+            try:
+                max_files = int(limit_input)
+                print(f"Will scan up to {max_files} files")
+            except ValueError:
+                print("Invalid number, scanning all files")
+        
+        confirm = input("\n⚠️  This can take a LONG time. Continue? (y/n): ").strip().lower()
+        if confirm != "y":
+            return
         
         # Get directories to scan
         scan_dirs = []
@@ -395,34 +405,53 @@ class Visionarr:
         
         total_files = 0
         profile7_files = []
+        errors = []
+        stopped = False
         
-        for name, directory in scan_dirs:
-            print(f"\n📂 Scanning {name}: {directory}")
-            
-            # Find all MKV files
-            mkv_files = list(directory.rglob("*.mkv"))
-            print(f"   Found {len(mkv_files)} MKV files")
-            
-            for i, mkv_file in enumerate(mkv_files, 1):
-                total_files += 1
-                # Progress indicator
-                if i % 10 == 0 or i == len(mkv_files):
-                    print(f"   Progress: {i}/{len(mkv_files)} ({100*i//len(mkv_files)}%)", end="\r")
+        print("\n💡 Press Ctrl+C to stop scan and see results so far\n")
+        
+        try:
+            for name, directory in scan_dirs:
+                if stopped:
+                    break
+                    
+                print(f"📂 Scanning {name}: {directory}")
                 
-                try:
-                    analysis = self.processor.analyze_file(mkv_file)
-                    if analysis.needs_conversion:
-                        profile7_files.append(mkv_file)
-                except Exception as e:
-                    logger.debug(f"Error analyzing {mkv_file}: {e}")
-            
-            print()  # Newline after progress
+                # Find all MKV files
+                mkv_files = list(directory.rglob("*.mkv"))
+                print(f"   Found {len(mkv_files)} MKV files")
+                
+                for i, mkv_file in enumerate(mkv_files, 1):
+                    if max_files and total_files >= max_files:
+                        print(f"\n   Reached limit of {max_files} files")
+                        stopped = True
+                        break
+                    
+                    total_files += 1
+                    # Progress indicator with filename
+                    print(f"   [{i}/{len(mkv_files)}] {mkv_file.name[:50]}...", end="\r")
+                    
+                    try:
+                        analysis = self.processor.analyze_file(mkv_file)
+                        if analysis.needs_conversion:
+                            profile7_files.append(mkv_file)
+                            print(f"\n   ✅ PROFILE 7: {mkv_file.name}")
+                    except PermissionError:
+                        errors.append(f"Permission denied: {mkv_file}")
+                    except Exception as e:
+                        errors.append(f"{mkv_file.name}: {str(e)[:50]}")
+                
+                print()  # Newline after progress
+                
+        except KeyboardInterrupt:
+            print("\n\n⚠️  Scan interrupted by user")
         
         print("\n" + "=" * 50)
         print("SCAN RESULTS")
         print("=" * 50)
         print(f"Total files scanned: {total_files}")
         print(f"Profile 7 files found: {len(profile7_files)}")
+        print(f"Errors encountered: {len(errors)}")
         
         if profile7_files:
             print("\n📋 Profile 7 files:")
@@ -430,6 +459,15 @@ class Visionarr:
                 print(f"   • {f.name}")
             if len(profile7_files) > 20:
                 print(f"   ... and {len(profile7_files) - 20} more")
+        
+        if errors and len(errors) <= 10:
+            print("\n⚠️  Errors:")
+            for err in errors:
+                print(f"   • {err}")
+        elif errors:
+            print(f"\n⚠️  {len(errors)} errors (showing first 5):")
+            for err in errors[:5]:
+                print(f"   • {err}")
         
         input("\nPress Enter to continue...")
     

@@ -55,8 +55,25 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY src/ ./src/
 
+# Create bashrc with welcome message for console users
+RUN echo '#!/bin/bash' > /home/visionarr/.bashrc && \
+    echo 'echo ""' >> /home/visionarr/.bashrc && \
+    echo 'echo " __      ___     _                            "' >> /home/visionarr/.bashrc && \
+    echo 'echo " \\ \\    / (_)   (_)                           "' >> /home/visionarr/.bashrc && \
+    echo 'echo "  \\ \\  / / _ ___ _  ___  _ __   __ _ _ __ _ __ "' >> /home/visionarr/.bashrc && \
+    echo 'echo "   \\ \\/ / | / __| |/ _ \\| ._  \\/ _. | .__| .__|"' >> /home/visionarr/.bashrc && \
+    echo 'echo "    \\  /  | \\__ \\ | (_) | | | | (_| |  |  |   "' >> /home/visionarr/.bashrc && \
+    echo 'echo "     \\/   |_|___/_|\\___/|_| |_|\\__,_|_|  |_|   "' >> /home/visionarr/.bashrc && \
+    echo 'echo ""' >> /home/visionarr/.bashrc && \
+    echo 'echo "  Dolby Vision Profile Converter"' >> /home/visionarr/.bashrc && \
+    echo 'echo "  by BeltaKoda | github.com/BeltaKoda/visionarr"' >> /home/visionarr/.bashrc && \
+    echo 'echo ""' >> /home/visionarr/.bashrc && \
+    echo 'echo "  Type: menu   - Launch interactive menu"' >> /home/visionarr/.bashrc && \
+    echo 'echo ""' >> /home/visionarr/.bashrc && \
+    echo 'alias menu="python -m src.main --manual"' >> /home/visionarr/.bashrc
+
 # Set ownership
-RUN chown -R visionarr:visionarr /app
+RUN chown -R visionarr:visionarr /app /home/visionarr
 
 # Switch to non-root user
 USER visionarr
@@ -67,7 +84,7 @@ ENV RADARR_API_KEY=""
 ENV SONARR_URL=""
 ENV SONARR_API_KEY=""
 ENV DRY_RUN="true"
-ENV MANUAL_MODE="false"
+
 ENV POLL_INTERVAL_SECONDS="300"
 ENV LOOKBACK_MINUTES="60"
 ENV PROCESS_CONCURRENCY="1"

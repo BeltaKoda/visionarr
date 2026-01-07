@@ -13,13 +13,14 @@ LABEL org.opencontainers.image.source="https://github.com/BeltaKoda/visionarr"
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
-# Install system dependencies
+# Install system dependencies including gosu for user switching
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     mkvtoolnix \
     mediainfo \
     wget \
     ca-certificates \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Install dovi_tool
@@ -37,13 +38,8 @@ RUN ARCH=$(dpkg --print-architecture) && \
     rm /tmp/dovi_tool.tar.gz && \
     dovi_tool --version
 
-# Create non-root user
-RUN useradd -m -s /bin/bash visionarr
-
 # Create mount point directories
-# These MUST be mounted to external volumes on Unraid!
-RUN mkdir -p /config /temp /media && \
-    chown -R visionarr:visionarr /config /temp
+RUN mkdir -p /config /temp /movies /tv
 
 # Set working directory
 WORKDIR /app
@@ -52,11 +48,14 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy application code and entrypoint
 COPY src/ ./src/
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Create bashrc with welcome message for console users
-RUN echo '#!/bin/bash' > /home/visionarr/.bashrc && \
+RUN mkdir -p /home/visionarr && \
+    echo '#!/bin/bash' > /home/visionarr/.bashrc && \
     echo 'echo ""' >> /home/visionarr/.bashrc && \
     echo 'echo " __      ___     _                            "' >> /home/visionarr/.bashrc && \
     echo 'echo " \\ \\    / (_)   (_)                           "' >> /home/visionarr/.bashrc && \
@@ -72,26 +71,20 @@ RUN echo '#!/bin/bash' > /home/visionarr/.bashrc && \
     echo 'echo ""' >> /home/visionarr/.bashrc && \
     echo 'alias menu="python -m src.main --manual"' >> /home/visionarr/.bashrc
 
-# Set ownership
-RUN chown -R visionarr:visionarr /app /home/visionarr
-
-# Run as root for Unraid compatibility (media files often owned by different users)
-# USER visionarr
-
 # Default environment variables
+ENV PUID=99
+ENV PGID=100
 ENV RADARR_URL=""
 ENV RADARR_API_KEY=""
 ENV SONARR_URL=""
 ENV SONARR_API_KEY=""
 ENV DRY_RUN="true"
-
 ENV POLL_INTERVAL_SECONDS="300"
 ENV LOOKBACK_MINUTES="60"
 ENV PROCESS_CONCURRENCY="1"
 ENV MIN_FREE_SPACE_GB="50"
 ENV CONFIG_DIR="/config"
 ENV TEMP_DIR="/temp"
-ENV MEDIA_DIR="/media"
 ENV BACKUP_ENABLED="true"
 ENV BACKUP_RETENTION_DAYS="7"
 ENV LOG_LEVEL="INFO"
@@ -100,5 +93,5 @@ ENV LOG_LEVEL="INFO"
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
     CMD python -c "import sys; sys.exit(0)"
 
-# Entry point
-ENTRYPOINT ["python", "-m", "src.main"]
+# Entry point with PUID/PGID handling
+ENTRYPOINT ["/entrypoint.sh"]

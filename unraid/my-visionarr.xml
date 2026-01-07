@@ -32,6 +32,9 @@
   <Config Name="Sonarr URL" Target="SONARR_URL" Default="http://172.16.6.4:8989" Mode="" Description="Sonarr base URL" Type="Variable" Display="always" Required="false" Mask="false"/>
   <Config Name="Sonarr API Key" Target="SONARR_API_KEY" Default="cbcbffdc8d2c4a5aa9df50f61b3e16f6" Mode="" Description="Sonarr API key" Type="Variable" Display="always" Required="false" Mask="true"/>
   
+  <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="User ID for file permissions (99 = nobody on Unraid)" Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Group ID for file permissions (100 = users on Unraid)" Type="Variable" Display="always" Required="false" Mask="false"/>
+  
   <Config Name="Dry Run" Target="DRY_RUN" Default="true" Mode="" Description="When true, logs what would happen without modifying files. START WITH THIS TRUE!" Type="Variable" Display="always" Required="false" Mask="false"/>
   
   <Config Name="Poll Interval (seconds)" Target="POLL_INTERVAL_SECONDS" Default="300" Mode="" Description="How often to check for new imports (default: 5 minutes)" Type="Variable" Display="advanced" Required="false" Mask="false"/>

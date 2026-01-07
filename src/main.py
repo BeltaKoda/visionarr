@@ -282,21 +282,8 @@ class Visionarr:
     
     def run_manual(self) -> None:
         """Run in manual/interactive mode."""
-        print_banner(__version__)
-        
-        if self.config.dry_run:
-            print("\n⚠️  DRY RUN MODE - No files will be modified\n")
-        
-        while True:
-            # Check setup status
-            setup_complete = self.state.is_initial_setup_complete
-            
-            print("\n" + "=" * 50)
-            print("             VISIONARR MANUAL MODE             ")
-            print("=" * 50)
-            
-            if not setup_complete:
-                print("  ⚠️  INITIAL SETUP NOT COMPLETE")
+        self._run_manual_mode()
+
     
     def _run_manual_mode(self) -> None:
         """Run interactive manual mode."""

@@ -511,6 +511,9 @@ class Visionarr:
             return
         elif choice == "4":
             return
+        else:
+            print("Invalid option")
+            return
 
         if not candidates:
             print("No Profile 7 files found.")

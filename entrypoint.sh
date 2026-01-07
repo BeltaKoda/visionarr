@@ -11,8 +11,9 @@ echo "Starting Visionarr with UID: $PUID, GID: $PGID"
 groupadd -o -g "$PGID" visionarr 2>/dev/null || groupmod -o -g "$PGID" visionarr 2>/dev/null || true
 
 # Create/modify user  
-id -u visionarr &>/dev/null || useradd -o -u "$PUID" -g "$PGID" -d /home/visionarr -s /bin/bash visionarr
-usermod -o -u "$PUID" -g "$PGID" visionarr 2>/dev/null || true
+# Create/modify user (silence warnings for system UIDs)
+id -u visionarr &>/dev/null || useradd -l -o -u "$PUID" -g "$PGID" -d /home/visionarr -s /bin/bash visionarr >/dev/null 2>&1
+usermod -o -u "$PUID" -g "$PGID" visionarr >/dev/null 2>&1 || true
 
 # Ensure home directory exists
 mkdir -p /home/visionarr

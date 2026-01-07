@@ -297,16 +297,30 @@ class Visionarr:
             
             if not setup_complete:
                 print("  ⚠️  INITIAL SETUP NOT COMPLETE")
-                print("  Auto-conversion is disabled until you complete setup.")
+    
+    def _run_manual_mode(self) -> None:
+        """Run interactive manual mode."""
+        self._print_banner()
+        
+        while True:
+            setup_complete = self.state.is_initial_setup_complete
+            
+            print("\n" + "=" * 50)
+            print("         VISIONARR MANUAL MODE          ")
+            print("=" * 50)
+            
+            if not setup_complete:
+                print("⚠️  INITIAL SETUP NOT COMPLETE")
+                print("   Auto-conversion is disabled until you complete setup.")
                 print("-" * 50)
             
-            print("  1. Scan Recent Imports")
-            print("  2. Scan Entire Library (⚠️  Heavy)")
-            print("  3. Process Single File")
-            print("  4. View Processing Queue")
-            print("  5. View Processed History")
-            print("  6. Database Management ▶")
-            print("  7. Exit")
+            print("  1. 🧪 Test Scan (X files) (⭐️ Recommended First)")
+            print("  2. 🔍 Scan Recent Imports")
+            print("  3. 📚 Scan Entire Library (⚠️ Heavy)")
+            print("  4. 📝 Manual Conversion (Select & Convert)")
+            print("  5. 📊 View Status (Live)")
+            print("  6. 🗄️  Database Management ▶")
+            print("  7. 🚪 Exit")
             
             if not setup_complete:
                 print("-" * 50)
@@ -317,15 +331,15 @@ class Visionarr:
             choice = input("\nSelect option: ").strip()
             
             if choice == "1":
-                self._manual_scan_recent()
+                self._manual_test_scan()
             elif choice == "2":
-                self._manual_scan_library()
+                self._manual_scan_recent()
             elif choice == "3":
-                self._manual_process_file()
+                self._manual_scan_library()
             elif choice == "4":
-                self._manual_view_queue()
+                self._manual_select_convert()
             elif choice == "5":
-                self._manual_view_history()
+                self._manual_view_status_live()
             elif choice == "6":
                 self._manual_db_management()
             elif choice == "7":
@@ -335,7 +349,257 @@ class Visionarr:
                 self._complete_initial_setup()
             else:
                 print("\nInvalid option")
-    
+
+    def _manual_test_scan(self) -> None:
+        """Test scan with user-defined limit."""
+        print("\n" + "=" * 50)
+        print("TEST SCAN")
+        print("=" * 50)
+        print("This will scan a limited number of files to verify access")
+        print("and detection without scanning your entire library.")
+        
+        try:
+            limit = int(input("\nHow many files to scan? (e.g., 50): ").strip())
+        except ValueError:
+            print("Invalid number.")
+            return
+
+        self._scan_library_impl(limit=limit)
+
+    def _manual_scan_library(self) -> None:
+        """Scan entire library."""
+        confirm = input("\n⚠️  This will scan ALL files. Continue? (y/n): ").strip().lower()
+        if confirm != "y":
+            return
+        self._scan_library_impl(limit=None)
+
+    def _scan_library_impl(self, limit: Optional[int] = None) -> List[Path]:
+        """Implementation of library scan."""
+        print("\n" + "=" * 50)
+        print(f"{'TEST' if limit else 'FULL'} LIBRARY SCAN")
+        print("=" * 50)
+        
+        # Get directories to scan
+        scan_dirs = []
+        movies_dir = Path("/movies")
+        tv_dir = Path("/tv")
+        
+        if movies_dir.exists():
+            scan_dirs.append(("Movies", movies_dir))
+        if tv_dir.exists():
+            scan_dirs.append(("TV Shows", tv_dir))
+        
+        if not scan_dirs:
+            print("❌ No media directories found (/movies, /tv)")
+            return []
+        
+        total_files = 0
+        profile7_files = []
+        errors = []
+        stopped = False
+        
+        print("\n💡 Press Ctrl+C to stop scan and see results so far\n")
+        
+        try:
+            for name, directory in scan_dirs:
+                if stopped:
+                    break
+                    
+                print(f"📂 Scanning {name}: {directory}")
+                
+                # Find all MKV files
+                # Note: rglob can be slow for massive libraries, but fine for now
+                mkv_files = list(directory.rglob("*.mkv"))
+                print(f"   Found {len(mkv_files)} MKV files")
+                
+                for i, mkv_file in enumerate(mkv_files, 1):
+                    if limit and total_files >= limit:
+                        print(f"\n   Reached limit of {limit} files")
+                        stopped = True
+                        break
+                    
+                    total_files += 1
+                    # Progress indication
+                    print(f"   [{i}/{len(mkv_files)}] {mkv_file.name[:60]}...", end="\r")
+                    
+                    try:
+                        analysis = self.processor.analyze_file(mkv_file)
+                        if analysis.needs_conversion:
+                            profile7_files.append(mkv_file)
+                            print(f"\n   ✅ PROFILE 7: {mkv_file.name}")
+                    except PermissionError:
+                        errors.append(f"Permission denied: {mkv_file}")
+                    except Exception as e:
+                        errors.append(f"{mkv_file.name}: {str(e)[:50]}")
+                        
+                print() 
+                
+        except KeyboardInterrupt:
+            print("\n\n⚠️  Scan interrupted by user")
+        
+        print("\n" + "=" * 50)
+        print("SCAN RESULTS")
+        print("=" * 50)
+        print(f"Total files scanned: {total_files}")
+        print(f"Profile 7: {len(profile7_files)}")
+        print(f"Errors: {len(errors)}")
+        
+        # Log to Docker logs
+        logger.info(f"Scan complete: {total_files} scanned, {len(profile7_files)} Profile 7 found")
+        
+        if profile7_files:
+            print("\n📋 Profile 7 files found:")
+            for i, f in enumerate(profile7_files[:20]):
+                print(f"   {i+1}. {f.name}")
+            if len(profile7_files) > 20:
+                print(f"   ... and {len(profile7_files) - 20} more")
+        
+        if errors:
+            print(f"\n⚠️  {len(errors)} Errors encountered (check logs for details)")
+            if len(errors) <= 5:
+                for e in errors: print(f"   • {e}")
+
+        # Return found files for potential use
+        if limit is None:
+             input("\nPress Enter to continue...")
+        return profile7_files
+
+    def _manual_select_convert(self) -> None:
+        """Select files to convert from library scan."""
+        print("\n" + "=" * 50)
+        print("MANUAL CONVERSION SELECTION")
+        print("=" * 50)
+        print("First, we need to find Profile 7 files.")
+        print("1. Scan Library (Find files)")
+        print("2. Enter Path Manually")
+        print("3. Back")
+        
+        choice = input("\nSelect option: ").strip()
+        
+        candidates = []
+        if choice == "1":
+            print("\nRunning quick scan...")
+            candidates = self._scan_library_impl(limit=None) # Or maybe prompt for limit?
+        elif choice == "2":
+             self._manual_process_file()
+             return
+        else:
+             return
+
+        if not candidates:
+            print("No Profile 7 files found.")
+            input("Press Enter...")
+            return
+
+        # Pagination Logic
+        selected = set()
+        page_size = 10
+        total_pages = (len(candidates) + page_size - 1) // page_size
+        current_page = 0
+        
+        while True:
+            print(f"\n--- Page {current_page + 1}/{total_pages} ---")
+            start_idx = current_page * page_size
+            end_idx = min(start_idx + page_size, len(candidates))
+            
+            for i in range(start_idx, end_idx):
+                file = candidates[i]
+                mark = "[x]" if i in selected else "[ ]"
+                print(f"{i+1}. {mark} {file.name}")
+            
+            print("-" * 50)
+            print("Commands:")
+            print("  <number>  Toggle selection")
+            print("  a         Select All (this page)")
+            print("  n         Next Page")
+            print("  p         Previous Page")
+            print("  d         Done (Start Conversion)")
+            print("  q         Quit")
+            
+            cmd = input("Command: ").strip().lower()
+            
+            if cmd == "n":
+                if current_page < total_pages - 1: current_page += 1
+            elif cmd == "p":
+                if current_page > 0: current_page -= 1
+            elif cmd == "a":
+                for i in range(start_idx, end_idx): selected.add(i)
+            elif cmd == "d":
+                if not selected:
+                    print("No files selected.")
+                    continue
+                break
+            elif cmd == "q":
+                return
+            elif cmd.isdigit():
+                idx = int(cmd) - 1
+                if 0 <= idx < len(candidates):
+                    if idx in selected: selected.remove(idx)
+                    else: selected.add(idx)
+            else:
+                # Handle comma separated lists like 1,2,3
+                try:
+                    parts = [int(x.strip()) - 1 for x in cmd.split(',')]
+                    for idx in parts:
+                        if 0 <= idx < len(candidates):
+                           if idx in selected: selected.remove(idx)
+                           else: selected.add(idx) 
+                except:
+                    pass
+
+        # Process selected
+        print(f"\nQueuing {len(selected)} files for conversion...")
+        for idx in selected:
+            file = candidates[idx]
+            self._process_job(ConversionJob(
+                file_path=file,
+                media_id=0,
+                title=file.stem
+            ))
+        print("✅ Added to queue.")
+        input("Press Enter to continue...")
+
+    def _manual_view_status_live(self) -> None:
+        """Live view of queue and processing status."""
+        import time
+        import os
+        
+        print("Starting live view... (Press Ctrl+C to exit)")
+        try:
+            while True:
+                # Clear screen (rudimentary)
+                print("\033[H\033[J", end="")
+                print("=" * 50)
+                print(f"VISIONARR LIVE STATUS  {time.strftime('%H:%M:%S')}")
+                print("=" * 50)
+                
+                jobs = self.queue.get_jobs()
+                active = [j for j in jobs if j.status == JobStatus.PROCESSING]
+                pending = [j for j in jobs if j.status == JobStatus.PENDING]
+                completed = [j for j in jobs if j.status == JobStatus.COMPLETED]
+                
+                print(f"Queue Stats: 🟢 {len(active)} Running | 🟡 {len(pending)} Pending | ✅ {len(completed)} Done")
+                print("-" * 50)
+                
+                if active:
+                    print("Currently Processing:")
+                    for job in active:
+                        print(f"  🔄 {job.title}")
+                        # If we had progress per job, show it here
+                else:
+                    print("No active conversions.")
+                    
+                print("\nPending:")
+                for job in pending[:5]:
+                    print(f"  ⏳ {job.title}")
+                if len(pending) > 5: print(f"     ... {len(pending)-5} more")
+
+                print("-" * 50)
+                print("Press Ctrl+C to return to menu")
+                time.sleep(2)
+        except KeyboardInterrupt:
+            return
+
     def _manual_scan_recent(self) -> None:
         """Scan recent imports from monitors."""
         print("\nScanning recent imports...")
@@ -368,169 +632,8 @@ class Visionarr:
                 else:
                     status = "Profile 8" if analysis.has_dovi else "No DoVi"
                     print(f"  ○ {media.title} ({status})")
-    
-    def _manual_scan_library(self) -> None:
-        """Scan entire library - heavy operation."""
-        print("\n" + "=" * 50)
-        print("FULL LIBRARY SCAN")
-        print("=" * 50)
-        
-        # Ask for file limit
-        limit_input = input("\nMax files to scan (Enter for all, or number for testing): ").strip()
-        max_files = None
-        if limit_input:
-            try:
-                max_files = int(limit_input)
-                print(f"Will scan up to {max_files} files")
-            except ValueError:
-                print("Invalid number, scanning all files")
-        
-        confirm = input("\n⚠️  This can take a LONG time. Continue? (y/n): ").strip().lower()
-        if confirm != "y":
-            return
-        
-        # Get directories to scan
-        scan_dirs = []
-        movies_dir = Path("/movies")
-        tv_dir = Path("/tv")
-        
-        if movies_dir.exists():
-            scan_dirs.append(("Movies", movies_dir))
-        if tv_dir.exists():
-            scan_dirs.append(("TV Shows", tv_dir))
-        
-        if not scan_dirs:
-            print("❌ No media directories found (/movies, /tv)")
-            return
-        
-        total_files = 0
-        profile7_files = []
-        errors = []
-        stopped = False
-        
-        print("\n💡 Press Ctrl+C to stop scan and see results so far\n")
-        
-        try:
-            for name, directory in scan_dirs:
-                if stopped:
-                    break
-                    
-                print(f"📂 Scanning {name}: {directory}")
-                
-                # Find all MKV files
-                mkv_files = list(directory.rglob("*.mkv"))
-                print(f"   Found {len(mkv_files)} MKV files")
-                
-                for i, mkv_file in enumerate(mkv_files, 1):
-                    if max_files and total_files >= max_files:
-                        print(f"\n   Reached limit of {max_files} files")
-                        stopped = True
-                        break
-                    
-                    total_files += 1
-                    # Progress indicator with filename
-                    print(f"   [{i}/{len(mkv_files)}] {mkv_file.name[:50]}...", end="\r")
-                    
-                    try:
-                        analysis = self.processor.analyze_file(mkv_file)
-                        if analysis.needs_conversion:
-                            profile7_files.append(mkv_file)
-                            print(f"\n   ✅ PROFILE 7: {mkv_file.name}")
-                    except PermissionError:
-                        errors.append(f"Permission denied: {mkv_file}")
-                    except Exception as e:
-                        errors.append(f"{mkv_file.name}: {str(e)[:50]}")
-                
-                print()  # Newline after progress
-                
-        except KeyboardInterrupt:
-            print("\n\n⚠️  Scan interrupted by user")
-        
-        print("\n" + "=" * 50)
-        print("SCAN RESULTS")
-        print("=" * 50)
-        print(f"Total files scanned: {total_files}")
-        print(f"Profile 7 files found: {len(profile7_files)}")
-        print(f"Errors encountered: {len(errors)}")
-        
-        # Also log to Docker logs
-        logger.info(f"Library scan complete: {total_files} files scanned, {len(profile7_files)} Profile 7 found, {len(errors)} errors")
-        for f in profile7_files:
-            logger.info(f"Profile 7 found: {f}")
-        
-        if profile7_files:
-            print("\n📋 Profile 7 files:")
-            for f in profile7_files[:20]:  # Show first 20
-                print(f"   • {f.name}")
-            if len(profile7_files) > 20:
-                print(f"   ... and {len(profile7_files) - 20} more")
-        
-        if errors and len(errors) <= 10:
-            print("\n⚠️  Errors:")
-            for err in errors:
-                print(f"   • {err}")
-        elif errors:
-            print(f"\n⚠️  {len(errors)} errors (showing first 5):")
-            for err in errors[:5]:
-                print(f"   • {err}")
-        
         input("\nPress Enter to continue...")
-    
-    def _manual_process_file(self) -> None:
-        """Process a single file by path."""
-        path_str = input("\nEnter file path: ").strip()
-        if not path_str:
-            return
-        
-        file_path = Path(path_str)
-        if not file_path.exists():
-            print(f"❌ File not found: {file_path}")
-            return
-        
-        print(f"\nAnalyzing: {file_path.name}")
-        analysis = self.processor.analyze_file(file_path)
-        
-        print(f"  Has DoVi: {analysis.has_dovi}")
-        print(f"  Profile: {analysis.dovi_profile}")
-        print(f"  Needs conversion: {analysis.needs_conversion}")
-        
-        if analysis.needs_conversion:
-            confirm = input("\nConvert now? (y/n): ").strip().lower()
-            if confirm == "y":
-                self._process_job(ConversionJob(
-                    file_path=file_path,
-                    media_id=0,
-                    title=file_path.stem
-                ))
-    
-    def _manual_view_queue(self) -> None:
-        """View current queue status."""
-        jobs = self.queue.get_jobs()
-        print(f"\nQueue: {len(jobs)} jobs")
-        
-        for job in jobs[-10:]:  # Last 10
-            status_icon = {
-                JobStatus.PENDING: "⏳",
-                JobStatus.PROCESSING: "🔄",
-                JobStatus.COMPLETED: "✅",
-                JobStatus.FAILED: "❌",
-                JobStatus.SKIPPED: "⏭️"
-            }.get(job.status, "?")
-            
-            print(f"  {status_icon} {job.title} [{job.status.value}]")
-    
-    def _manual_view_history(self) -> None:
-        """View processed file history."""
-        files = self.state.get_processed_files(limit=20)
-        stats = self.state.get_stats()
-        
-        print(f"\n📊 Stats: {stats['processed_count']} processed, {stats['failed_count']} failed")
-        print(f"   Total: {stats['total_bytes_processed'] / 1e9:.1f} GB\n")
-        
-        for f in files[:10]:
-            print(f"  ✅ {Path(f.file_path).name}")
-            print(f"     {f.original_profile} → {f.new_profile} | {f.processed_at}")
-    
+
     def _manual_db_management(self) -> None:
         """Database management submenu."""
         while True:
@@ -577,7 +680,7 @@ class Visionarr:
         print("Before enabling automatic conversions, please confirm:")
         print("")
         print("  ✓ You have reviewed detected Profile 7 files")
-        print("    using 'Scan Recent Imports' (option 1)")
+        print("    using 'Scan Recent Imports' or 'Test Scan' ")
         print("")
         print("  ✓ You understand that automatic mode will convert")
         print("    ALL newly imported Profile 7 files without asking")

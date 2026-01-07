@@ -2,27 +2,24 @@
 # Visionarr entrypoint script
 # Handles PUID/PGID for Unraid compatibility
 
-PUID=${PUID:-1000}
-PGID=${PGID:-1000}
+PUID=${PUID:-99}
+PGID=${PGID:-100}
 
 echo "Starting Visionarr with UID: $PUID, GID: $PGID"
 
-# Create group if it doesn't exist
-if ! getent group visionarr > /dev/null 2>&1; then
-    groupadd -g "$PGID" visionarr
-else
-    groupmod -o -g "$PGID" visionarr
-fi
+# Create/modify group
+groupadd -o -g "$PGID" visionarr 2>/dev/null || groupmod -o -g "$PGID" visionarr 2>/dev/null || true
 
-# Create/modify user
-if ! id -u visionarr > /dev/null 2>&1; then
-    useradd -o -u "$PUID" -g visionarr -d /home/visionarr -s /bin/bash visionarr
-else
-    usermod -o -u "$PUID" visionarr
-fi
+# Create/modify user  
+id -u visionarr &>/dev/null || useradd -o -u "$PUID" -g "$PGID" -d /home/visionarr -s /bin/bash visionarr
+usermod -o -u "$PUID" -g "$PGID" visionarr 2>/dev/null || true
+
+# Ensure home directory exists
+mkdir -p /home/visionarr
+chown "$PUID:$PGID" /home/visionarr
 
 # Fix ownership of app directories
-chown -R visionarr:visionarr /app /config /temp /home/visionarr 2>/dev/null || true
+chown -R "$PUID:$PGID" /app /config /temp 2>/dev/null || true
 
 # Run as the configured user
-exec gosu visionarr python -m src.main "$@"
+exec gosu "$PUID:$PGID" python -m src.main "$@"

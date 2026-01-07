@@ -453,6 +453,11 @@ class Visionarr:
         print(f"Profile 7 files found: {len(profile7_files)}")
         print(f"Errors encountered: {len(errors)}")
         
+        # Also log to Docker logs
+        logger.info(f"Library scan complete: {total_files} files scanned, {len(profile7_files)} Profile 7 found, {len(errors)} errors")
+        for f in profile7_files:
+            logger.info(f"Profile 7 found: {f}")
+        
         if profile7_files:
             print("\n📋 Profile 7 files:")
             for f in profile7_files[:20]:  # Show first 20

@@ -375,9 +375,63 @@ class Visionarr:
         if confirm != "y":
             return
         
-        print("\nScanning library...")
-        # Implementation would iterate through all files
-        print("(Full library scan not yet implemented)")
+        print("\n" + "=" * 50)
+        print("FULL LIBRARY SCAN")
+        print("=" * 50)
+        
+        # Get directories to scan
+        scan_dirs = []
+        movies_dir = Path("/movies")
+        tv_dir = Path("/tv")
+        
+        if movies_dir.exists():
+            scan_dirs.append(("Movies", movies_dir))
+        if tv_dir.exists():
+            scan_dirs.append(("TV Shows", tv_dir))
+        
+        if not scan_dirs:
+            print("❌ No media directories found (/movies, /tv)")
+            return
+        
+        total_files = 0
+        profile7_files = []
+        
+        for name, directory in scan_dirs:
+            print(f"\n📂 Scanning {name}: {directory}")
+            
+            # Find all MKV files
+            mkv_files = list(directory.rglob("*.mkv"))
+            print(f"   Found {len(mkv_files)} MKV files")
+            
+            for i, mkv_file in enumerate(mkv_files, 1):
+                total_files += 1
+                # Progress indicator
+                if i % 10 == 0 or i == len(mkv_files):
+                    print(f"   Progress: {i}/{len(mkv_files)} ({100*i//len(mkv_files)}%)", end="\r")
+                
+                try:
+                    analysis = self.processor.analyze_file(mkv_file)
+                    if analysis.needs_conversion:
+                        profile7_files.append(mkv_file)
+                except Exception as e:
+                    logger.debug(f"Error analyzing {mkv_file}: {e}")
+            
+            print()  # Newline after progress
+        
+        print("\n" + "=" * 50)
+        print("SCAN RESULTS")
+        print("=" * 50)
+        print(f"Total files scanned: {total_files}")
+        print(f"Profile 7 files found: {len(profile7_files)}")
+        
+        if profile7_files:
+            print("\n📋 Profile 7 files:")
+            for f in profile7_files[:20]:  # Show first 20
+                print(f"   • {f.name}")
+            if len(profile7_files) > 20:
+                print(f"   ... and {len(profile7_files) - 20} more")
+        
+        input("\nPress Enter to continue...")
     
     def _manual_process_file(self) -> None:
         """Process a single file by path."""

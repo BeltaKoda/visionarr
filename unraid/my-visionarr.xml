@@ -3,7 +3,7 @@
   <Name>visionarr</Name>
   <Repository>ghcr.io/beltakoda/visionarr:latest</Repository>
   <Registry>https://ghcr.io</Registry>
-  <Network>bridge</Network>
+  <Network>br0.6</Network>
   <Privileged>false</Privileged>
   <Support>https://github.com/BeltaKoda/visionarr/issues</Support>
   <Project>https://github.com/BeltaKoda/visionarr</Project>
@@ -18,8 +18,6 @@
     No transcoding - just metadata conversion. No quality loss!
     
     IMPORTANT: Start with DRY_RUN=true to verify detection before enabling conversions.
-    
-    CRITICAL: Mount paths for /movies and /tv MUST match exactly what Radarr and Sonarr use!
   </Overview>
   <Category>MediaApp:Video</Category>
   <Icon>https://raw.githubusercontent.com/BeltaKoda/visionarr/main/assets/icon.png</Icon>
@@ -29,10 +27,10 @@
   <ExtraParams>--init</ExtraParams>
   
   <!-- Environment Variables -->
-  <Config Name="Radarr URL" Target="RADARR_URL" Default="" Mode="" Description="Radarr base URL (e.g., http://192.168.1.100:7878)" Type="Variable" Display="always" Required="true" Mask="false"/>
-  <Config Name="Radarr API Key" Target="RADARR_API_KEY" Default="" Mode="" Description="Radarr API key (Settings → General → API Key)" Type="Variable" Display="always" Required="true" Mask="true"/>
-  <Config Name="Sonarr URL" Target="SONARR_URL" Default="" Mode="" Description="Sonarr base URL (optional, for TV shows)" Type="Variable" Display="always" Required="false" Mask="false"/>
-  <Config Name="Sonarr API Key" Target="SONARR_API_KEY" Default="" Mode="" Description="Sonarr API key (optional)" Type="Variable" Display="always" Required="false" Mask="true"/>
+  <Config Name="Radarr URL" Target="RADARR_URL" Default="http://172.16.6.6:7878" Mode="" Description="Radarr base URL" Type="Variable" Display="always" Required="true" Mask="false"/>
+  <Config Name="Radarr API Key" Target="RADARR_API_KEY" Default="bf21975482774bbda65f7285d9fe32fc" Mode="" Description="Radarr API key" Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="Sonarr URL" Target="SONARR_URL" Default="http://172.16.6.4:8989" Mode="" Description="Sonarr base URL" Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="Sonarr API Key" Target="SONARR_API_KEY" Default="cbcbffdc8d2c4a5aa9df50f61b3e16f6" Mode="" Description="Sonarr API key" Type="Variable" Display="always" Required="false" Mask="true"/>
   
   <Config Name="Dry Run" Target="DRY_RUN" Default="true" Mode="" Description="When true, logs what would happen without modifying files. START WITH THIS TRUE!" Type="Variable" Display="always" Required="false" Mask="false"/>
   <Config Name="Manual Mode" Target="MANUAL_MODE" Default="false" Mode="" Description="When true, starts interactive console instead of daemon. Attach to console to use." Type="Variable" Display="always" Required="false" Mask="false"/>
@@ -51,6 +49,6 @@
   <!-- Volume Mappings - MUST match Radarr/Sonarr mount points -->
   <Config Name="Config" Target="/config" Default="/mnt/user/appdata/visionarr" Mode="rw" Description="Persistent config and database storage" Type="Path" Display="always" Required="true" Mask="false"/>
   <Config Name="Temp" Target="/temp" Default="/mnt/user/appdata/visionarr/temp" Mode="rw" Description="CRITICAL: Temp files during conversion. Use cache drive if available!" Type="Path" Display="always" Required="true" Mask="false"/>
-  <Config Name="Movies" Target="/movies" Default="/mnt/user/movies" Mode="rw" Description="Movies folder - MUST match Radarr's /movies mount exactly" Type="Path" Display="always" Required="true" Mask="false"/>
-  <Config Name="TV Shows" Target="/tv" Default="/mnt/user/tv" Mode="rw" Description="TV Shows folder - MUST match Sonarr's /tv mount exactly" Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="Movies" Target="/movies" Default="/mnt/user/movies" Mode="rw" Description="Movies folder - MUST match Radarr's /movies mount" Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="TV Shows" Target="/tv" Default="/mnt/user/shows" Mode="rw" Description="TV Shows folder - MUST match Sonarr's /tv mount" Type="Path" Display="always" Required="true" Mask="false"/>
 </Container>

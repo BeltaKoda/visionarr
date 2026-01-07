@@ -241,7 +241,11 @@ class Processor:
                         pass
             
         except Exception as e:
-            logger.warning(f"dovi_tool profile detection failed: {e}")
+            msg = str(e).lower()
+            if "invalid rpu" in msg:
+                logger.warning(f"dovi_tool check failed (invalid RPU data): {file_path.name}")
+            else:
+                logger.warning(f"dovi_tool profile detection failed: {e}")
             return DoViProfile.UNKNOWN
     
     # -------------------------------------------------------------------------

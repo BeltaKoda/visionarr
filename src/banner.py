@@ -19,4 +19,6 @@ def print_banner(version: str = "1.0.0"):
     """Print the startup banner."""
     print(VISIONARR_ASCII)
     print(f"                    v{version}")
+    print("          by BeltaKoda")
+    print("   github.com/BeltaKoda/visionarr")
     print()

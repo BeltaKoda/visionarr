@@ -33,7 +33,6 @@
   <Config Name="Sonarr API Key" Target="SONARR_API_KEY" Default="cbcbffdc8d2c4a5aa9df50f61b3e16f6" Mode="" Description="Sonarr API key" Type="Variable" Display="always" Required="false" Mask="true"/>
   
   <Config Name="Dry Run" Target="DRY_RUN" Default="true" Mode="" Description="When true, logs what would happen without modifying files. START WITH THIS TRUE!" Type="Variable" Display="always" Required="false" Mask="false"/>
-  <Config Name="Manual Mode" Target="MANUAL_MODE" Default="false" Mode="" Description="When true, starts interactive console instead of daemon. Attach to console to use." Type="Variable" Display="always" Required="false" Mask="false"/>
   
   <Config Name="Poll Interval (seconds)" Target="POLL_INTERVAL_SECONDS" Default="300" Mode="" Description="How often to check for new imports (default: 5 minutes)" Type="Variable" Display="advanced" Required="false" Mask="false"/>
   <Config Name="Lookback (minutes)" Target="LOOKBACK_MINUTES" Default="60" Mode="" Description="How far back to look in history for new imports" Type="Variable" Display="advanced" Required="false" Mask="false"/>

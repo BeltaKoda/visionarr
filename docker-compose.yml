@@ -12,9 +12,6 @@ services:
       - SONARR_URL=${SONARR_URL:-}
       - SONARR_API_KEY=${SONARR_API_KEY:-}
       
-      # Operation mode
-      - DRY_RUN=${DRY_RUN:-true}
-      
       # Polling
       - POLL_INTERVAL_SECONDS=${POLL_INTERVAL_SECONDS:-300}
       - LOOKBACK_MINUTES=${LOOKBACK_MINUTES:-60}

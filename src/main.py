@@ -61,7 +61,6 @@ class Visionarr:
         self.state = StateDB(config.database_path)
         self.processor = Processor(
             temp_dir=config.temp_dir,
-            dry_run=config.dry_run,
             backup_enabled=config.backup_enabled
         )
         
@@ -162,28 +161,30 @@ class Visionarr:
         """Run in daemon mode with continuous polling."""
         print_banner(__version__)
         
-        if self.config.dry_run:
-            logger.warning("=" * 60)
-            logger.warning("DRY RUN MODE - No files will be modified")
-            logger.warning("=" * 60)
-        
-        # Check for first-run protection
+        # Check for first-run protection - idle until setup complete
         if not self.state.is_initial_setup_complete:
             logger.warning("=" * 60)
-            logger.warning("FIRST RUN DETECTED")
+            logger.warning("AUTO-PROCESSING DISABLED")
             logger.warning("=" * 60)
             logger.warning("")
-            logger.warning("For safety, automatic conversions are DISABLED on first run.")
-            logger.warning("You must run manual mode first to review and confirm")
-            logger.warning("the initial batch of detected Profile 7 files.")
+            logger.warning("To enable automatic processing:")
+            logger.warning("  Run: docker exec -it visionarr menu")
             logger.warning("")
-            logger.warning("To enable automatic mode:")
-            logger.warning("  1. Run: docker exec -it visionarr python -m src.main --manual")
-            logger.warning("  2. Use 'Scan Recent Imports' to review detected files")
-            logger.warning("  3. Select '8. Complete Initial Setup' when ready")
+            logger.warning("In the menu:")
+            logger.warning("  1. Do a Test Scan to verify detection works")
+            logger.warning("  2. Complete Required Initial Setup")
             logger.warning("")
-            logger.warning("Daemon will now run in DETECTION-ONLY mode...")
+            logger.warning("Waiting for initial setup...")
             logger.warning("=" * 60)
+            
+            # Idle loop - wait for setup to be completed via menu
+            while self.running and not self.state.is_initial_setup_complete:
+                time.sleep(30)  # Check every 30 seconds
+            
+            if not self.running:
+                return  # Container stopped while waiting
+            
+            logger.info("Initial setup detected! Starting auto-processing...")
         
         # Test connections (warn but don't exit - will retry during polling)
         for monitor in self.monitors:
@@ -195,16 +196,14 @@ class Visionarr:
         if cleaned:
             logger.info(f"Cleaned up {cleaned} orphaned work directories")
         
-        # Start queue workers (only if setup complete)
-        if self.state.is_initial_setup_complete:
-            self.queue.start()
+        # Start queue workers
+        self.queue.start()
         
         # Send startup notification
         if self.notifier:
             self.notifier.notify_startup()
         
         # Setup signal handlers
-        self.running = True
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
         
@@ -313,7 +312,7 @@ class Visionarr:
             
             if not setup_complete:
                 print("-" * 50)
-                print("  8. ✅ Complete Initial Setup (enable auto-mode)")
+                print("  8. ✅ Complete Required Initial Setup (enable auto-mode)")
             
             print("=" * 50)
             
@@ -691,7 +690,8 @@ class Visionarr:
             print("  2. Clear ALL Processed (full rescan)")
             print("  3. Clear Failed Files (retry all)")
             print("  4. Export Database to JSON")
-            print("  5. Back")
+            print("  5. 🗑️  Clear Database (requires new scans)")
+            print("  6. Back")
             print("=" * 44)
             
             choice = input("\nSelect option: ").strip()
@@ -716,24 +716,35 @@ class Visionarr:
                 export_path.write_text(json_data)
                 print(f"✅ Exported to {export_path}")
             elif choice == "5":
+                print("\n⚠️  This will clear ALL database records:")
+                print("   - All processed file history")
+                print("   - All failed file records")
+                print("   - Initial setup status (will need to re-enable auto-mode)")
+                confirm = input("\nType 'clear' to confirm: ").strip().lower()
+                if confirm == "clear":
+                    count = self.state.clear_database()
+                    print(f"✅ Database cleared ({count} records removed)")
+                    print("   You will need to complete initial setup again.")
+                else:
+                    print("❌ Cancelled")
+            elif choice == "6":
                 break
     
     def _complete_initial_setup(self) -> None:
         """Complete initial setup to enable automatic conversion mode."""
         print("\n" + "=" * 55)
-        print("         COMPLETE INITIAL SETUP         ")
+        print("      COMPLETE REQUIRED INITIAL SETUP      ")
         print("=" * 55)
         print("")
         print("Before enabling automatic conversions, please confirm:")
         print("")
-        print("  ✓ You have reviewed detected Profile 7 files")
-        print("    using 'Scan Recent Imports' or 'Test Scan' ")
+        print("  ✓ You have tested scanning with 'Test Scan'")
+        print("    and verified Profile 7 detection works")
         print("")
         print("  ✓ You understand that automatic mode will convert")
         print("    ALL newly imported Profile 7 files without asking")
         print("")
-        print("  ✓ DRY_RUN is set appropriately for your needs")
-        print(f"    (Currently: DRY_RUN={'true' if self.config.dry_run else 'FALSE - WILL MODIFY FILES'})")
+        print("  ⚠️  This WILL modify your media files!")
         print("")
         print("=" * 55)
         

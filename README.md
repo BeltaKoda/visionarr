@@ -72,9 +72,11 @@ Profile 7 MKV → Extract HEVC → Convert RPU Metadata → Remux → Profile 8 
 docker run -d \
   -e RADARR_URL=http://your-radarr:7878 \
   -e RADARR_API_KEY=your-api-key \
-  -e DRY_RUN=True \
   -v /path/to/media:/media \
   beltakoda/visionarr
+
+# Then complete initial setup:
+docker exec -it visionarr menu
 ```
 
 ## Configuration

@@ -57,9 +57,8 @@ class Processor:
     2. Confirm profile with dovi_tool for candidates
     """
     
-    def __init__(self, temp_dir: Path, dry_run: bool = True, backup_enabled: bool = True):
+    def __init__(self, temp_dir: Path, backup_enabled: bool = True):
         self.temp_dir = temp_dir
-        self.dry_run = dry_run
         self.backup_enabled = backup_enabled
         
         # Verify required tools are available
@@ -283,10 +282,6 @@ class Processor:
         
         Returns the path to the converted file.
         """
-        if self.dry_run:
-            logger.info(f"[DRY RUN] Would convert: {file_path}")
-            return file_path
-        
         logger.info(f"Starting Profile 7 -> 8 conversion: {file_path}")
         
         # Create unique temp directory for this conversion

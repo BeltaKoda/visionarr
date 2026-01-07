@@ -17,7 +17,8 @@
     
     No transcoding - just metadata conversion. No quality loss!
     
-    IMPORTANT: Start with DRY_RUN=true to verify detection before enabling conversions.
+    FIRST RUN: Auto-processing is disabled until you complete initial setup.
+    Run: docker exec -it visionarr menu
   </Overview>
   <Category>MediaApp:Video</Category>
   <Icon>https://raw.githubusercontent.com/BeltaKoda/visionarr/main/assets/icon.png</Icon>
@@ -34,8 +35,6 @@
   
   <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="User ID for file permissions (99 = nobody on Unraid)" Type="Variable" Display="always" Required="false" Mask="false"/>
   <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Group ID for file permissions (100 = users on Unraid)" Type="Variable" Display="always" Required="false" Mask="false"/>
-  
-  <Config Name="Dry Run" Target="DRY_RUN" Default="true" Mode="" Description="When true, logs what would happen without modifying files. START WITH THIS TRUE!" Type="Variable" Display="always" Required="false" Mask="false"/>
   
   <Config Name="Poll Interval (seconds)" Target="POLL_INTERVAL_SECONDS" Default="300" Mode="" Description="How often to check for new imports (default: 5 minutes)" Type="Variable" Display="advanced" Required="false" Mask="false"/>
   <Config Name="Lookback (minutes)" Target="LOOKBACK_MINUTES" Default="60" Mode="" Description="How far back to look in history for new imports" Type="Variable" Display="advanced" Required="false" Mask="false"/>

@@ -304,3 +304,22 @@ class StateDB:
         with self._get_connection() as conn:
             conn.execute("DELETE FROM settings WHERE key = 'initial_setup_complete'")
 
+    def clear_database(self) -> int:
+        """
+        Clear entire database - all processed, failed, and settings.
+        Returns total number of records cleared.
+        Use this for a complete fresh start.
+        """
+        total = 0
+        with self._get_connection() as conn:
+            # Count records first
+            processed = conn.execute("SELECT COUNT(*) FROM processed_files").fetchone()[0]
+            failed = conn.execute("SELECT COUNT(*) FROM failed_files").fetchone()[0]
+            total = processed + failed
+            
+            # Clear all tables
+            conn.execute("DELETE FROM processed_files")
+            conn.execute("DELETE FROM failed_files")
+            conn.execute("DELETE FROM settings WHERE key = 'initial_setup_complete'")
+        
+        return total

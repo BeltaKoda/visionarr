@@ -25,7 +25,6 @@ class Config:
     sonarr_api_key: Optional[str] = None
     
     # Operation mode
-    dry_run: bool = True
     manual_mode: bool = False
     
     # Polling configuration
@@ -112,7 +111,6 @@ def load_config() -> Config:
         sonarr_api_key=os.getenv("SONARR_API_KEY"),
         
         # Operation mode
-        dry_run=_parse_bool(os.getenv("DRY_RUN", "true")),
         manual_mode=_parse_bool(os.getenv("MANUAL_MODE", "false")),
         
         # Polling

@@ -161,6 +161,9 @@ class Visionarr:
         """Run in daemon mode with continuous polling."""
         print_banner(__version__)
         
+        # Set running flag early so idle loop works
+        self.running = True
+        
         # Check for first-run protection - idle until setup complete
         if not self.state.is_initial_setup_complete:
             logger.warning("=" * 60)

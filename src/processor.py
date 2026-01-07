@@ -125,8 +125,8 @@ class Processor:
         file_size = file_path.stat().st_size
         is_mkv = file_path.suffix.lower() == ".mkv"
         
-        # Stage 1: Fast mediainfo check
-        has_dovi, video_codec = self._check_dovi_mediainfo(file_path)
+        # Stage 1: Fast mediainfo check (now returns profile if found)
+        has_dovi, profile, video_codec = self._check_dovi_mediainfo(file_path)
         
         if not has_dovi:
             return MediaAnalysis(
@@ -138,8 +138,9 @@ class Processor:
                 file_size_bytes=file_size
             )
         
-        # Stage 2: Get exact profile with dovi_tool
-        profile = self._get_dovi_profile(file_path)
+        # Stage 2: Fallback to dovi_tool if mediainfo profile is unknown
+        if profile == DoViProfile.UNKNOWN:
+            profile = self._get_dovi_profile(file_path)
         
         return MediaAnalysis(
             file_path=file_path,
@@ -150,10 +151,10 @@ class Processor:
             file_size_bytes=file_size
         )
     
-    def _check_dovi_mediainfo(self, file_path: Path) -> Tuple[bool, Optional[str]]:
+    def _check_dovi_mediainfo(self, file_path: Path) -> Tuple[bool, DoViProfile, Optional[str]]:
         """
-        Quick check for DoVi using mediainfo.
-        Returns (has_dovi, video_codec).
+        Quick check for DoVi and profile using mediainfo.
+        Returns (has_dovi, profile, video_codec).
         """
         try:
             result = self._run_command(
@@ -166,6 +167,7 @@ class Processor:
             
             video_codec = None
             has_dovi = False
+            profile = DoViProfile.UNKNOWN
             
             for track in tracks:
                 if track.get("@type") == "Video":
@@ -175,11 +177,26 @@ class Processor:
                     hdr_format = track.get("HDR_Format", "")
                     hdr_format_profile = track.get("HDR_Format_Profile", "")
                     
-                    if "Dolby Vision" in hdr_format or "dvhe" in hdr_format_profile.lower():
+                    # Map mediainfo profile strings to our enum
+                    profile_str = hdr_format_profile.lower()
+                    if "dvhe" in profile_str or "dvav" in profile_str or "dvh1" in profile_str:
+                        has_dovi = True
+                        if ".07" in profile_str:
+                            profile = DoViProfile.PROFILE_7
+                        elif ".08" in profile_str:
+                            profile = DoViProfile.PROFILE_8
+                        elif ".05" in profile_str:
+                            profile = DoViProfile.PROFILE_5
+                        elif "dvav.04" in profile_str:
+                            # Sometimes mediainfo reports profile 4 which is obsolete
+                            profile = DoViProfile.UNKNOWN
+                        break
+                    
+                    if "Dolby Vision" in hdr_format:
                         has_dovi = True
                         break
             
-            return has_dovi, video_codec
+            return has_dovi, profile, video_codec
             
         except Exception as e:
             logger.warning(f"mediainfo check failed: {e}")

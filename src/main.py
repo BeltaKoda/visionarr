@@ -357,13 +357,17 @@ class Visionarr:
 
     def _manual_scan_library(self) -> None:
         """Scan entire library."""
-        confirm = input("\n⚠️  This will scan ALL files. Continue? (y/n): ").strip().lower()
-        if confirm != "y":
-            return
-        self._scan_library_impl(limit=None)
+        # Don't skip confirmation here - user explicitly chose "Scan Entire Library"
+        self._scan_library_impl(limit=None, skip_confirmation=False)
 
-    def _scan_library_impl(self, limit: Optional[int] = None) -> List[Path]:
+    def _scan_library_impl(self, limit: Optional[int] = None, skip_confirmation: bool = False) -> List[Path]:
         """Implementation of library scan."""
+        # Only ask for confirmation if it's a full scan and we're not skipping
+        if limit is None and not skip_confirmation:
+            confirm = input("\n⚠️  This will scan ALL files. Continue? (y/n): ").strip().lower()
+            if confirm != "y":
+                return []
+        
         print("\n" + "=" * 50)
         print(f"{'TEST' if limit else 'FULL'} LIBRARY SCAN")
         print("=" * 50)
@@ -459,17 +463,22 @@ class Visionarr:
         print("MANUAL CONVERSION SELECTION")
         print("=" * 50)
         print("First, we need to find Profile 7 files.")
-        print("1. Scan Library (Find files)")
-        print("2. Enter Path Manually")
-        print("3. Back")
+        print("1. Quick Scan (50 files max)")
+        print("2. Full Library Scan")
+        print("3. Enter Path Manually")
+        print("4. Back")
         
         choice = input("\nSelect option: ").strip()
 
         candidates = []
         if choice == "1":
-            print("\nRunning quick scan...")
-            candidates = self._scan_library_impl(limit=None)
+            print("\nRunning quick scan (50 files max)...")
+            candidates = self._scan_library_impl(limit=50, skip_confirmation=True)
         elif choice == "2":
+            print("\nScanning entire library for Profile 7 files...")
+            print("(This may take a while for large libraries)")
+            candidates = self._scan_library_impl(limit=None, skip_confirmation=True)
+        elif choice == "3":
             path_str = input("\nEnter full file path: ").strip()
             if not path_str:
                 print("No path entered.")
@@ -490,16 +499,17 @@ class Visionarr:
                 print(f"Profile 7 detected: {file_path.name}")
                 confirm = input("Convert now? (y/n): ").strip().lower()
                 if confirm == "y":
-                    self._process_job(ConversionJob(
+                    self.queue.add_job(
                         file_path=file_path,
                         media_id=0,
                         title=file_path.stem
-                    ))
-                    print("Conversion queued.")
+                    )
+                    print("✅ Queued for conversion")
+                    print("   💡 Use 'View Status' to monitor progress")
             except Exception as e:
                 print(f"Error analyzing file: {e}")
             return
-        else:
+        elif choice == "4":
             return
 
         if not candidates:
@@ -563,16 +573,17 @@ class Visionarr:
                 except:
                     pass
 
-        # Process selected
+        # Queue selected files
         print(f"\nQueuing {len(selected)} files for conversion...")
         for idx in selected:
             file = candidates[idx]
-            self._process_job(ConversionJob(
+            self.queue.add_job(
                 file_path=file,
                 media_id=0,
                 title=file.stem
-            ))
-        print("✅ Added to queue.")
+            )
+        print(f"✅ {len(selected)} files added to queue")
+        print("   💡 Use 'View Status' to monitor progress")
         input("Press Enter to continue...")
 
     def _manual_view_status_live(self) -> None:
@@ -620,6 +631,8 @@ class Visionarr:
         """Scan recent imports from monitors."""
         print("\nScanning recent imports...")
         
+        profile7_files = []  # Collect all Profile 7 files first
+        
         for monitor in self.monitors:
             if not monitor.test_connection():
                 print(f"  ❌ Cannot connect to {monitor.name}")
@@ -633,21 +646,36 @@ class Visionarr:
                     print(f"  ✓ {media.title} (already processed)")
                     continue
                 
-                analysis = self.processor.analyze_file(media.file_path)
-                
-                if analysis.needs_conversion:
-                    print(f"  ⚡ {media.title} - Profile 7 DETECTED")
+                try:
+                    analysis = self.processor.analyze_file(media.file_path)
                     
-                    confirm = input("    Convert now? (y/n): ").strip().lower()
-                    if confirm == "y":
-                        self._process_job(ConversionJob(
-                            file_path=media.file_path,
-                            media_id=media.media_id,
-                            title=media.title
-                        ))
-                else:
-                    status = "Profile 8" if analysis.has_dovi else "No DoVi"
-                    print(f"  ○ {media.title} ({status})")
+                    if analysis.needs_conversion:
+                        print(f"  ⚡ {media.title} - Profile 7 DETECTED")
+                        profile7_files.append(media)
+                    else:
+                        status = "Profile 8" if analysis.has_dovi else "No DoVi"
+                        print(f"  ○ {media.title} ({status})")
+                except Exception as e:
+                    print(f"  ❌ {media.title} - Error: {str(e)[:50]}")
+        
+        # Offer to queue all Profile 7 files at once
+        if profile7_files:
+            print(f"\n{'=' * 50}")
+            print(f"Found {len(profile7_files)} Profile 7 file(s) needing conversion")
+            print(f"{'=' * 50}")
+            confirm = input(f"\nQueue all {len(profile7_files)} for conversion? (y/n): ").strip().lower()
+            if confirm == "y":
+                for media in profile7_files:
+                    self.queue.add_job(
+                        file_path=media.file_path,
+                        media_id=media.media_id,
+                        title=media.title
+                    )
+                print(f"✅ {len(profile7_files)} files added to queue")
+                print("   💡 Use 'View Status' to monitor progress")
+        else:
+            print("\n✅ No Profile 7 files need conversion")
+        
         input("\nPress Enter to continue...")
 
     def _manual_db_management(self) -> None:

@@ -69,7 +69,7 @@ RUN mkdir -p /home/visionarr /etc/skel && \
     echo 'echo "  by BeltaKoda | github.com/BeltaKoda/visionarr"' >> /tmp/bashrc && \
     echo 'echo ""' >> /tmp/bashrc && \
     echo 'echo "  IMPORTANT First Run Instructions:"' >> /tmp/bashrc && \
-    echo 'echo "  1. Type `menu` to launch the interactive menu"' >> /tmp/bashrc && \
+    echo 'echo "  1. Type \"menu\" to launch the interactive menu"' >> /tmp/bashrc && \
     echo 'echo "  2. Run a Test Scan to verify settings (optional)"' >> /tmp/bashrc && \
     echo 'echo "  3. Run Full Library Scan to build the database"' >> /tmp/bashrc && \
     echo 'echo "  4. Complete Setup to enable automatic mode"' >> /tmp/bashrc && \

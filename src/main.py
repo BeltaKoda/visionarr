@@ -287,7 +287,7 @@ class Visionarr:
     
     def _run_manual_mode(self) -> None:
         """Run interactive manual mode."""
-        self._print_banner()
+        print_banner(__version__)
         
         while True:
             setup_complete = self.state.is_initial_setup_complete

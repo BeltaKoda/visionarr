@@ -103,9 +103,9 @@ ENV BACKUP_ENABLED="true"
 ENV BACKUP_RETENTION_DAYS="7"
 ENV LOG_LEVEL="INFO"
 
-# Health check
+# Health check - verify config dir is accessible and Python can import app
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
-    CMD python -c "import sys; sys.exit(0)"
+    CMD python -c "from pathlib import Path; assert Path('/config').exists(); from src.config import load_config; load_config()"
 
 # Entry point with PUID/PGID handling
 ENTRYPOINT ["/entrypoint.sh"]

@@ -129,14 +129,15 @@ class Visionarr:
     
     def _on_job_complete(self, job: ConversionJob) -> None:
         """Called when a job completes successfully."""
-        # Trigger rescan in appropriate monitor
-        for monitor in self.monitors:
-            # Try to trigger rescan (we don't know which monitor owns this file)
-            try:
-                monitor.trigger_rescan(job.media_id)
-                break
-            except Exception:
-                continue
+        # Trigger rescan in the correct monitor
+        if job.monitor_type:
+            for monitor in self.monitors:
+                if monitor.name.lower() == job.monitor_type:
+                    try:
+                        monitor.trigger_rescan(job.media_id)
+                    except Exception as e:
+                        logger.warning(f"Failed to trigger rescan in {monitor.name}: {e}")
+                    break
         
         # Send notification
         if self.notifier:
@@ -248,15 +249,16 @@ class Visionarr:
                                     f"[DETECTION-ONLY] Found Profile 7: {media.title} "
                                     f"- Run manual mode to convert"
                                 )
-                        except Exception:
-                            pass  # Ignore analysis errors in detection mode
+                        except Exception as e:
+                            logger.debug(f"Could not analyze {media.title}: {e}")
                         continue
                     
                     # Normal mode: Add to queue
                     self.queue.add_job(
                         file_path=media.file_path,
                         media_id=media.media_id,
-                        title=media.title
+                        title=media.title,
+                        monitor_type=monitor.name.lower()
                     )
                     
             except Exception as e:
@@ -448,7 +450,7 @@ class Visionarr:
 
         # Return found files for potential use
         if limit is None:
-             input("\nPress Enter to continue...")
+            input("\nPress Enter to continue...")
         return profile7_files
 
     def _manual_select_convert(self) -> None:
@@ -462,16 +464,43 @@ class Visionarr:
         print("3. Back")
         
         choice = input("\nSelect option: ").strip()
-        
+
         candidates = []
         if choice == "1":
             print("\nRunning quick scan...")
-            candidates = self._scan_library_impl(limit=None) # Or maybe prompt for limit?
+            candidates = self._scan_library_impl(limit=None)
         elif choice == "2":
-             self._manual_process_file()
-             return
+            path_str = input("\nEnter full file path: ").strip()
+            if not path_str:
+                print("No path entered.")
+                return
+            file_path = Path(path_str)
+            if not file_path.exists():
+                print(f"File not found: {file_path}")
+                return
+            if file_path.suffix.lower() != ".mkv":
+                print("Only MKV files are supported.")
+                return
+            try:
+                analysis = self.processor.analyze_file(file_path)
+                if not analysis.needs_conversion:
+                    status = "Profile 8" if analysis.has_dovi else "No DoVi"
+                    print(f"File does not need conversion ({status})")
+                    return
+                print(f"Profile 7 detected: {file_path.name}")
+                confirm = input("Convert now? (y/n): ").strip().lower()
+                if confirm == "y":
+                    self._process_job(ConversionJob(
+                        file_path=file_path,
+                        media_id=0,
+                        title=file_path.stem
+                    ))
+                    print("Conversion queued.")
+            except Exception as e:
+                print(f"Error analyzing file: {e}")
+            return
         else:
-             return
+            return
 
         if not candidates:
             print("No Profile 7 files found.")

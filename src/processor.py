@@ -200,7 +200,7 @@ class Processor:
             
         except Exception as e:
             logger.warning(f"mediainfo check failed: {e}")
-            return False, None
+            return False, DoViProfile.UNKNOWN, None
     
     def _get_dovi_profile(self, file_path: Path) -> DoViProfile:
         """
@@ -394,39 +394,52 @@ class Processor:
     def check_disk_space(self, file_path: Path, multiplier: float = 2.5) -> bool:
         """
         Check if there's enough disk space for conversion.
-        
+
         We need approximately 2-2.5x the file size for temp files.
         """
         file_size = file_path.stat().st_size
         required_space = int(file_size * multiplier)
-        
-        # Check temp directory space
-        temp_stat = os.statvfs(self.temp_dir)
-        temp_free = temp_stat.f_frsize * temp_stat.f_bavail
-        
+
+        # Check temp directory space (cross-platform)
+        try:
+            disk_usage = shutil.disk_usage(self.temp_dir)
+            temp_free = disk_usage.free
+        except (OSError, AttributeError):
+            # Fallback for edge cases
+            logger.warning("Could not check disk space, proceeding anyway")
+            return True
+
         if temp_free < required_space:
             logger.warning(
                 f"Insufficient temp space: {temp_free / 1e9:.1f}GB available, "
                 f"{required_space / 1e9:.1f}GB required"
             )
             return False
-        
+
         return True
     
     def cleanup_orphaned_files(self) -> int:
         """
         Clean up orphaned partial/temp files from interrupted conversions.
-        
+
         Called on startup to handle crashed conversions.
         Returns count of files cleaned up.
         """
         count = 0
-        
+
         # Clean up work directories in temp
-        for item in self.temp_dir.iterdir():
-            if item.is_dir() and item.name.startswith("convert_"):
-                logger.info(f"Cleaning up orphaned work directory: {item}")
-                shutil.rmtree(item, ignore_errors=True)
-                count += 1
-        
+        try:
+            for item in self.temp_dir.iterdir():
+                if item.is_dir() and item.name.startswith("convert_"):
+                    logger.info(f"Cleaning up orphaned work directory: {item}")
+                    try:
+                        shutil.rmtree(item)
+                        count += 1
+                    except PermissionError as e:
+                        logger.warning(f"Permission denied cleaning up {item}: {e}")
+                    except OSError as e:
+                        logger.warning(f"Could not clean up {item}: {e}")
+        except PermissionError as e:
+            logger.warning(f"Cannot access temp directory for cleanup: {e}")
+
         return count

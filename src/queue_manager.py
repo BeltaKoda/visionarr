@@ -33,6 +33,7 @@ class ConversionJob:
     file_path: Path
     media_id: int
     title: str
+    monitor_type: Optional[str] = None  # "radarr" or "sonarr"
     status: JobStatus = JobStatus.PENDING
     error_message: Optional[str] = None
     created_at: datetime = field(default_factory=datetime.now)
@@ -87,12 +88,13 @@ class QueueManager:
         self._jobs: List[ConversionJob] = []
         self._lock = threading.Lock()
     
-    def add_job(self, file_path: Path, media_id: int, title: str) -> ConversionJob:
+    def add_job(self, file_path: Path, media_id: int, title: str, monitor_type: Optional[str] = None) -> ConversionJob:
         """Add a new job to the queue."""
         job = ConversionJob(
             file_path=file_path,
             media_id=media_id,
-            title=title
+            title=title,
+            monitor_type=monitor_type
         )
         
         with self._lock:
@@ -103,10 +105,10 @@ class QueueManager:
                 ):
                     logger.debug(f"Job already queued: {file_path}")
                     return existing
-            
+
             self._jobs.append(job)
-        
-        self._queue.put(job)
+            self._queue.put(job)
+
         logger.info(f"Job queued: {title}")
         return job
     
@@ -159,35 +161,38 @@ class QueueManager:
     
     def _process_job(self, job: ConversionJob, retry_count: int = 0) -> None:
         """Process a single job with retry logic."""
-        job.status = JobStatus.PROCESSING
-        job.started_at = datetime.now()
-        
+        with self._lock:
+            job.status = JobStatus.PROCESSING
+            job.started_at = datetime.now()
+
         logger.info(f"Processing: {job.title}")
-        
+
         try:
             success = self.process_callback(job)
-            
+
+            with self._lock:
+                if success:
+                    job.status = JobStatus.COMPLETED
+                    job.completed_at = datetime.now()
+                else:
+                    job.status = JobStatus.SKIPPED
+                    job.completed_at = datetime.now()
+
             if success:
-                job.status = JobStatus.COMPLETED
-                job.completed_at = datetime.now()
-                logger.info(
-                    f"Completed: {job.title} "
-                    f"({job.duration_seconds:.1f}s)"
-                )
-                
+                duration_str = f" ({job.duration_seconds:.1f}s)" if job.duration_seconds else ""
+                logger.info(f"Completed: {job.title}{duration_str}")
                 if self.on_complete_callback:
                     self.on_complete_callback(job)
             else:
-                job.status = JobStatus.SKIPPED
-                job.completed_at = datetime.now()
                 logger.info(f"Skipped: {job.title}")
-                
+
         except Exception as e:
-            job.error_message = str(e)
-            
+            with self._lock:
+                job.error_message = str(e)
+
             if retry_count < self.max_retries:
-                # Exponential backoff
-                wait_time = 2 ** retry_count * 10  # 10s, 20s, 40s
+                # Exponential backoff - uses shorter intervals
+                wait_time = min(2 ** retry_count * 5, 30)  # 5s, 10s, 20s, max 30s
                 logger.warning(
                     f"Job failed, retrying in {wait_time}s "
                     f"(attempt {retry_count + 1}/{self.max_retries}): {e}"
@@ -195,10 +200,11 @@ class QueueManager:
                 time.sleep(wait_time)
                 self._process_job(job, retry_count + 1)
             else:
-                job.status = JobStatus.FAILED
-                job.completed_at = datetime.now()
+                with self._lock:
+                    job.status = JobStatus.FAILED
+                    job.completed_at = datetime.now()
                 logger.error(f"Job failed after {self.max_retries} retries: {job.title}")
-                
+
                 if self.on_fail_callback:
                     self.on_fail_callback(job)
     

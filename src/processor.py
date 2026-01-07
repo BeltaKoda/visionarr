@@ -194,45 +194,51 @@ class Processor:
         try:
             # First extract a small sample of the HEVC stream
             # dovi_tool needs raw HEVC, not the container
-            sample_path = self.temp_dir / "sample.hevc"
+            import uuid
+            sample_path = self.temp_dir / f"sample_{uuid.uuid4().hex}.hevc"
             
-            # Extract first 50MB for quick analysis
-            self._run_command(
-                [
-                    "ffmpeg", "-y",
-                    "-i", str(file_path),
-                    "-c:v", "copy",
-                    "-an", "-sn",
-                    "-t", "10",  # First 10 seconds
-                    "-f", "hevc",
-                    str(sample_path)
-                ],
-                "HEVC sample extraction"
-            )
+            try:
+                # Extract first 50MB for quick analysis
+                self._run_command(
+                    [
+                        "ffmpeg", "-y",
+                        "-i", str(file_path),
+                        "-c:v", "copy",
+                        "-an", "-sn",
+                        "-t", "10",  # First 10 seconds
+                        "-f", "hevc",
+                        str(sample_path)
+                    ],
+                    "HEVC sample extraction"
+                )
+                
+                # Analyze with dovi_tool
+                result = self._run_command(
+                    ["dovi_tool", "info", "-i", str(sample_path), "--summary"],
+                    "dovi_tool profile analysis"
+                )
+                
+                # Parse output for profile
+                output = result.stdout + result.stderr
+                
+                # Look for profile number in output
+                # dovi_tool output includes "Profile: X" or similar
+                if "profile 7" in output.lower() or "dvhe.07" in output.lower():
+                    return DoViProfile.PROFILE_7
+                elif "profile 8" in output.lower() or "dvhe.08" in output.lower():
+                    return DoViProfile.PROFILE_8
+                elif "profile 5" in output.lower() or "dvhe.05" in output.lower():
+                    return DoViProfile.PROFILE_5
+                else:
+                    return DoViProfile.UNKNOWN
             
-            # Analyze with dovi_tool
-            result = self._run_command(
-                ["dovi_tool", "info", "-i", str(sample_path), "--summary"],
-                "dovi_tool profile analysis"
-            )
-            
-            # Clean up sample
-            if sample_path.exists():
-                sample_path.unlink()
-            
-            # Parse output for profile
-            output = result.stdout + result.stderr
-            
-            # Look for profile number in output
-            # dovi_tool output includes "Profile: X" or similar
-            if "profile 7" in output.lower() or "dvhe.07" in output.lower():
-                return DoViProfile.PROFILE_7
-            elif "profile 8" in output.lower() or "dvhe.08" in output.lower():
-                return DoViProfile.PROFILE_8
-            elif "profile 5" in output.lower() or "dvhe.05" in output.lower():
-                return DoViProfile.PROFILE_5
-            else:
-                return DoViProfile.UNKNOWN
+            finally:
+                # Always clean up sample, even if analysis failed
+                if sample_path.exists():
+                    try:
+                        sample_path.unlink()
+                    except OSError:
+                        pass
             
         except Exception as e:
             logger.warning(f"dovi_tool profile detection failed: {e}")

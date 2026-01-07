@@ -184,11 +184,10 @@ class Visionarr:
             logger.warning("Daemon will now run in DETECTION-ONLY mode...")
             logger.warning("=" * 60)
         
-        # Test connections
+        # Test connections (warn but don't exit - will retry during polling)
         for monitor in self.monitors:
             if not monitor.test_connection():
-                logger.error(f"Failed to connect to {monitor.name}")
-                sys.exit(1)
+                logger.warning(f"Cannot connect to {monitor.name} - will retry during polling")
         
         # Cleanup any orphaned files
         cleaned = self.processor.cleanup_orphaned_files()

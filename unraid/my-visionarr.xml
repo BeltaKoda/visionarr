@@ -24,7 +24,7 @@
   <TemplateURL>https://raw.githubusercontent.com/BeltaKoda/visionarr/main/unraid/visionarr.xml</TemplateURL>
   <Maintainer>BeltaKoda</Maintainer>
   <Shell>bash</Shell>
-  <ExtraParams>--init</ExtraParams>
+  <ExtraParams>--init --restart=unless-stopped</ExtraParams>
   
   <!-- Environment Variables -->
   <Config Name="Radarr URL" Target="RADARR_URL" Default="http://172.16.6.6:7878" Mode="" Description="Radarr base URL" Type="Variable" Display="always" Required="true" Mask="false"/>

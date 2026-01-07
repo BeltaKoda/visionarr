@@ -75,8 +75,8 @@ RUN echo '#!/bin/bash' > /home/visionarr/.bashrc && \
 # Set ownership
 RUN chown -R visionarr:visionarr /app /home/visionarr
 
-# Switch to non-root user
-USER visionarr
+# Run as root for Unraid compatibility (media files often owned by different users)
+# USER visionarr
 
 # Default environment variables
 ENV RADARR_URL=""

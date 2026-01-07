@@ -64,6 +64,13 @@ class StateDB:
                     retry_count INTEGER DEFAULT 0
                 );
                 
+                CREATE TABLE IF NOT EXISTS discovered_files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_path TEXT UNIQUE NOT NULL,
+                    title TEXT NOT NULL,
+                    discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                
                 CREATE TABLE IF NOT EXISTS settings (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -71,6 +78,7 @@ class StateDB:
                 
                 CREATE INDEX IF NOT EXISTS idx_processed_path ON processed_files(file_path);
                 CREATE INDEX IF NOT EXISTS idx_failed_path ON failed_files(file_path);
+                CREATE INDEX IF NOT EXISTS idx_discovered_path ON discovered_files(file_path);
             """)
     
     @contextmanager
@@ -306,7 +314,7 @@ class StateDB:
 
     def clear_database(self) -> int:
         """
-        Clear entire database - all processed, failed, and settings.
+        Clear entire database - all processed, failed, discovered, and settings.
         Returns total number of records cleared.
         Use this for a complete fresh start.
         """
@@ -315,11 +323,51 @@ class StateDB:
             # Count records first
             processed = conn.execute("SELECT COUNT(*) FROM processed_files").fetchone()[0]
             failed = conn.execute("SELECT COUNT(*) FROM failed_files").fetchone()[0]
-            total = processed + failed
+            discovered = conn.execute("SELECT COUNT(*) FROM discovered_files").fetchone()[0]
+            total = processed + failed + discovered
             
             # Clear all tables
             conn.execute("DELETE FROM processed_files")
             conn.execute("DELETE FROM failed_files")
+            conn.execute("DELETE FROM discovered_files")
             conn.execute("DELETE FROM settings WHERE key = 'initial_setup_complete'")
         
         return total
+
+    # ==================== Discovered Files Methods ====================
+    
+    def add_discovered(self, file_path: str, title: str) -> bool:
+        """Add a discovered Profile 7 file. Returns True if new, False if already exists."""
+        with self._get_connection() as conn:
+            try:
+                conn.execute(
+                    "INSERT OR IGNORE INTO discovered_files (file_path, title) VALUES (?, ?)",
+                    (file_path, title)
+                )
+                return conn.total_changes > 0
+            except sqlite3.Error:
+                return False
+
+    def get_discovered(self) -> List[dict]:
+        """Get all discovered Profile 7 files not yet processed."""
+        with self._get_connection() as conn:
+            rows = conn.execute("""
+                SELECT d.id, d.file_path, d.title, d.discovered_at
+                FROM discovered_files d
+                WHERE d.file_path NOT IN (SELECT file_path FROM processed_files)
+                ORDER BY d.discovered_at DESC
+            """).fetchall()
+            return [dict(row) for row in rows]
+
+    def remove_discovered(self, file_path: str) -> bool:
+        """Remove a file from discovered list (after queuing for conversion)."""
+        with self._get_connection() as conn:
+            conn.execute("DELETE FROM discovered_files WHERE file_path = ?", (file_path,))
+            return conn.total_changes > 0
+
+    def clear_discovered(self) -> int:
+        """Clear all discovered files. Returns count deleted."""
+        with self._get_connection() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM discovered_files").fetchone()[0]
+            conn.execute("DELETE FROM discovered_files")
+            return count

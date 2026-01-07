@@ -8,9 +8,12 @@ Entry point for the application. Supports:
 
 import argparse
 import logging
+import select
 import signal
 import sys
+import termios
 import time
+import tty
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -306,7 +309,7 @@ class Visionarr:
                 print("-" * 50)
             
             print("  1. 🧪 Test Scan (X files) (⭐️ Recommended First)")
-            print("  2. 🔍 Scan Recent Imports")
+            print(f"  2. 🔍 Scan Recent Imports (last {self.config.lookback_minutes} min)")
             print("  3. 📚 Scan Entire Library (⚠️ Heavy)")
             print("  4. 📝 Manual Conversion (Select & Convert)")
             print("  5. 📊 View Status (Live)")
@@ -415,12 +418,14 @@ class Visionarr:
                     
                     total_files += 1
                     # Progress indication
-                    print(f"   [{i}/{len(mkv_files)}] {mkv_file.name[:60]}...", end="\r")
+                    print(f"   [{total_files} scanned | {len(profile7_files)} Profile 7] {mkv_file.name[:45]}...", end="\r")
                     
                     try:
                         analysis = self.processor.analyze_file(mkv_file)
                         if analysis.needs_conversion:
                             profile7_files.append(mkv_file)
+                            # Save to DB for Manual Conversion selection
+                            self.state.add_discovered(str(mkv_file), mkv_file.stem)
                             print(f"\n   ✅ PROFILE 7: {mkv_file.name}")
                     except PermissionError:
                         errors.append(f"Permission denied: {mkv_file}")
@@ -460,146 +465,108 @@ class Visionarr:
         return profile7_files
 
     def _manual_select_convert(self) -> None:
-        """Select files to convert from library scan."""
-        print("\n" + "=" * 50)
-        print("MANUAL CONVERSION SELECTION")
-        print("=" * 50)
-        print("First, we need to find Profile 7 files.")
-        print("1. Quick Scan (50 files max)")
-        print("2. Full Library Scan")
-        print("3. Enter Path Manually")
-        print("4. Back")
+        """Select files to convert from previously discovered Profile 7 files."""
+        # Get discovered files from DB (not yet processed)
+        discovered = self.state.get_discovered()
         
-        choice = input("\nSelect option: ").strip()
-
-        candidates = []
-        if choice == "1":
-            print("\nRunning quick scan (50 files max)...")
-            candidates = self._scan_library_impl(limit=50, skip_confirmation=True)
-        elif choice == "2":
-            print("\nScanning entire library for Profile 7 files...")
-            print("(This may take a while for large libraries)")
-            candidates = self._scan_library_impl(limit=None, skip_confirmation=True)
-        elif choice == "3":
-            path_str = input("\nEnter full file path: ").strip()
-            if not path_str:
-                print("No path entered.")
-                return
-            file_path = Path(path_str)
-            if not file_path.exists():
-                print(f"File not found: {file_path}")
-                return
-            if file_path.suffix.lower() != ".mkv":
-                print("Only MKV files are supported.")
-                return
-            try:
-                analysis = self.processor.analyze_file(file_path)
-                if not analysis.needs_conversion:
-                    status = "Profile 8" if analysis.has_dovi else "No DoVi"
-                    print(f"File does not need conversion ({status})")
-                    return
-                print(f"Profile 7 detected: {file_path.name}")
-                confirm = input("Convert now? (y/n): ").strip().lower()
-                if confirm == "y":
-                    self.queue.add_job(
-                        file_path=file_path,
-                        media_id=0,
-                        title=file_path.stem
-                    )
-                    print("✅ Queued for conversion")
-                    print("   💡 Use 'View Status' to monitor progress")
-            except Exception as e:
-                print(f"Error analyzing file: {e}")
+        print("\n" + "=" * 55)
+        print("       MANUAL CONVERSION - Select Files        ")
+        print("=" * 55)
+        
+        if not discovered:
+            print("\nNo Profile 7 files found in database.")
+            print("\nTo discover files, run one of these first:")
+            print("  1. Test Scan")
+            print("  2. Scan Recent Imports")
+            print("  3. Scan Entire Library")
+            input("\nPress Enter to continue...")
             return
-        elif choice == "4":
-            return
-        else:
-            print("Invalid option")
-            return
-
-        if not candidates:
-            print("No Profile 7 files found.")
-            input("Press Enter...")
-            return
-
-        # Pagination Logic
+        
+        print(f"\nFound {len(discovered)} Profile 7 file(s) from previous scans")
+        print("-" * 55)
+        
+        # Pagination setup (5 files per page)
         selected = set()
-        page_size = 10
-        total_pages = (len(candidates) + page_size - 1) // page_size
+        page_size = 5
+        total_pages = (len(discovered) + page_size - 1) // page_size
         current_page = 0
         
         while True:
-            print(f"\n--- Page {current_page + 1}/{total_pages} ---")
+            # Display current page
+            print(f"\nPage {current_page + 1}/{total_pages}:")
             start_idx = current_page * page_size
-            end_idx = min(start_idx + page_size, len(candidates))
+            end_idx = min(start_idx + page_size, len(discovered))
             
             for i in range(start_idx, end_idx):
-                file = candidates[i]
+                item = discovered[i]
                 mark = "[x]" if i in selected else "[ ]"
-                print(f"{i+1}. {mark} {file.name}")
+                # Truncate title for display
+                title = item['title'][:45] + "..." if len(item['title']) > 45 else item['title']
+                print(f"  {mark} {i+1}. {title}")
             
-            print("-" * 50)
-            print("Commands:")
-            print("  <number>  Toggle selection")
-            print("  a         Select All (this page)")
-            print("  n         Next Page")
-            print("  p         Previous Page")
-            print("  d         Done (Start Conversion)")
-            print("  q         Quit")
+            print("-" * 55)
+            print(f"Selected: {len(selected)} file(s)")
+            print("Enter numbers to toggle (e.g. '1 3'), n=next, p=prev, d=done, q=cancel")
             
-            cmd = input("Command: ").strip().lower()
+            cmd = input("> ").strip().lower()
             
             if cmd == "n":
-                if current_page < total_pages - 1: current_page += 1
+                if current_page < total_pages - 1:
+                    current_page += 1
             elif cmd == "p":
-                if current_page > 0: current_page -= 1
-            elif cmd == "a":
-                for i in range(start_idx, end_idx): selected.add(i)
+                if current_page > 0:
+                    current_page -= 1
             elif cmd == "d":
                 if not selected:
-                    print("No files selected.")
+                    print("⚠️  No files selected. Select some files or press 'q' to cancel.")
                     continue
                 break
             elif cmd == "q":
                 return
-            elif cmd.isdigit():
-                idx = int(cmd) - 1
-                if 0 <= idx < len(candidates):
-                    if idx in selected: selected.remove(idx)
-                    else: selected.add(idx)
             else:
-                # Handle comma separated lists like 1,2,3
+                # Handle space-separated numbers like "1 3" or "1,3" or single number
                 try:
-                    parts = [int(x.strip()) - 1 for x in cmd.split(',')]
-                    for idx in parts:
-                        if 0 <= idx < len(candidates):
-                           if idx in selected: selected.remove(idx)
-                           else: selected.add(idx) 
-                except:
-                    pass
-
+                    parts = cmd.replace(",", " ").split()
+                    for part in parts:
+                        idx = int(part) - 1
+                        if 0 <= idx < len(discovered):
+                            if idx in selected:
+                                selected.remove(idx)
+                            else:
+                                selected.add(idx)
+                except ValueError:
+                    print("Invalid input. Enter numbers, 'n', 'p', 'd', or 'q'.")
+        
         # Queue selected files
-        print(f"\nQueuing {len(selected)} files for conversion...")
+        print(f"\nQueuing {len(selected)} file(s) for conversion...")
         for idx in selected:
-            file = candidates[idx]
+            item = discovered[idx]
+            file_path = Path(item['file_path'])
             self.queue.add_job(
-                file_path=file,
+                file_path=file_path,
                 media_id=0,
-                title=file.stem
+                title=item['title']
             )
-        print(f"✅ {len(selected)} files added to queue")
+            # Remove from discovered after queuing
+            self.state.remove_discovered(item['file_path'])
+        
+        print(f"✅ {len(selected)} file(s) added to queue")
         print("   💡 Use 'View Status' to monitor progress")
-        input("Press Enter to continue...")
+        input("\nPress Enter to continue...")
 
     def _manual_view_status_live(self) -> None:
         """Live view of queue and processing status."""
-        import time
-        import os
+        print("Starting live view... (Press 'q' to exit)")
         
-        print("Starting live view... (Press Ctrl+C to exit)")
+        # Save terminal settings
+        old_settings = termios.tcgetattr(sys.stdin)
+        
         try:
+            # Set terminal to cbreak mode for single-char input
+            tty.setcbreak(sys.stdin.fileno())
+            
             while True:
-                # Clear screen (rudimentary)
+                # Clear screen
                 print("\033[H\033[J", end="")
                 print("=" * 50)
                 print(f"VISIONARR LIVE STATUS  {time.strftime('%H:%M:%S')}")
@@ -617,24 +584,31 @@ class Visionarr:
                     print("Currently Processing:")
                     for job in active:
                         print(f"  🔄 {job.title}")
-                        # If we had progress per job, show it here
                 else:
                     print("No active conversions.")
                     
                 print("\nPending:")
                 for job in pending[:5]:
                     print(f"  ⏳ {job.title}")
-                if len(pending) > 5: print(f"     ... {len(pending)-5} more")
+                if len(pending) > 5:
+                    print(f"     ... {len(pending)-5} more")
 
                 print("-" * 50)
-                print("Press Ctrl+C to return to menu")
-                time.sleep(2)
-        except KeyboardInterrupt:
-            return
+                print("Press 'q' to return to menu")
+                
+                # Check for 'q' key with timeout (refresh every 2 seconds)
+                for _ in range(20):  # 20 x 0.1s = 2s
+                    if select.select([sys.stdin], [], [], 0.1)[0]:
+                        ch = sys.stdin.read(1)
+                        if ch.lower() == 'q':
+                            return
+        finally:
+            # Restore terminal settings
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
 
     def _manual_scan_recent(self) -> None:
         """Scan recent imports from monitors."""
-        print("\nScanning recent imports...")
+        print(f"\nScanning imports from last {self.config.lookback_minutes} minutes...")
         
         profile7_files = []  # Collect all Profile 7 files first
         
@@ -657,6 +631,8 @@ class Visionarr:
                     if analysis.needs_conversion:
                         print(f"  ⚡ {media.title} - Profile 7 DETECTED")
                         profile7_files.append(media)
+                        # Save to DB for Manual Conversion selection
+                        self.state.add_discovered(str(media.file_path), media.title)
                     else:
                         status = "Profile 8" if analysis.has_dovi else "No DoVi"
                         print(f"  ○ {media.title} ({status})")
@@ -689,48 +665,32 @@ class Visionarr:
             print("\n" + "=" * 44)
             print("         DATABASE MANAGEMENT              ")
             print("=" * 44)
-            print("  1. Clear Single File (allow reprocess)")
-            print("  2. Clear ALL Processed (full rescan)")
-            print("  3. Clear Failed Files (retry all)")
-            print("  4. Export Database to JSON")
-            print("  5. 🗑️  Clear Database (requires new scans)")
-            print("  6. Back")
+            print("  1. 🗑️  Clear Database (requires new scans)")
+            print("  2. 📤 Export Database to JSON")
+            print("  3. ← Back")
             print("=" * 44)
             
             choice = input("\nSelect option: ").strip()
             
             if choice == "1":
-                path = input("Enter file path to clear: ").strip()
-                if self.state.clear_processed(path):
-                    print("✅ Cleared")
-                else:
-                    print("❌ Not found")
-            elif choice == "2":
-                confirm = input("⚠️  Clear ALL processed records? (type 'yes'): ").strip()
-                if confirm == "yes":
-                    count = self.state.clear_all_processed()
-                    print(f"✅ Cleared {count} records")
-            elif choice == "3":
-                count = self.state.clear_failed()
-                print(f"✅ Cleared {count} failed records")
-            elif choice == "4":
-                json_data = self.state.export_to_json()
-                export_path = self.config.config_dir / "visionarr_export.json"
-                export_path.write_text(json_data)
-                print(f"✅ Exported to {export_path}")
-            elif choice == "5":
                 print("\n⚠️  This will clear ALL database records:")
                 print("   - All processed file history")
                 print("   - All failed file records")
-                print("   - Initial setup status (will need to re-enable auto-mode)")
+                print("   - All discovered Profile 7 files")
+                print("   - Initial setup status (auto-mode disabled)")
                 confirm = input("\nType 'clear' to confirm: ").strip().lower()
                 if confirm == "clear":
                     count = self.state.clear_database()
                     print(f"✅ Database cleared ({count} records removed)")
-                    print("   You will need to complete initial setup again.")
+                    print("   You will need to run a scan and complete setup again.")
                 else:
                     print("❌ Cancelled")
-            elif choice == "6":
+            elif choice == "2":
+                json_data = self.state.export_to_json()
+                export_path = self.config.config_dir / "visionarr_export.json"
+                export_path.write_text(json_data)
+                print(f"✅ Exported to {export_path}")
+            elif choice == "3":
                 break
     
     def _complete_initial_setup(self) -> None:

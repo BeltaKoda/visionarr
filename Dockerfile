@@ -54,22 +54,27 @@ COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # Create bashrc with welcome message for console users
-RUN mkdir -p /home/visionarr && \
-    echo '#!/bin/bash' > /home/visionarr/.bashrc && \
-    echo 'echo ""' >> /home/visionarr/.bashrc && \
-    echo 'echo " __      ___     _                            "' >> /home/visionarr/.bashrc && \
-    echo 'echo " \\ \\    / (_)   (_)                           "' >> /home/visionarr/.bashrc && \
-    echo 'echo "  \\ \\  / / _ ___ _  ___  _ __   __ _ _ __ _ __ "' >> /home/visionarr/.bashrc && \
-    echo 'echo "   \\ \\/ / | / __| |/ _ \\| ._  \\/ _. | .__| .__|"' >> /home/visionarr/.bashrc && \
-    echo 'echo "    \\  /  | \\__ \\ | (_) | | | | (_| |  |  |   "' >> /home/visionarr/.bashrc && \
-    echo 'echo "     \\/   |_|___/_|\\___/|_| |_|\\__,_|_|  |_|   "' >> /home/visionarr/.bashrc && \
-    echo 'echo ""' >> /home/visionarr/.bashrc && \
-    echo 'echo "  Dolby Vision Profile Converter"' >> /home/visionarr/.bashrc && \
-    echo 'echo "  by BeltaKoda | github.com/BeltaKoda/visionarr"' >> /home/visionarr/.bashrc && \
-    echo 'echo ""' >> /home/visionarr/.bashrc && \
-    echo 'echo "  Type: menu   - Launch interactive menu"' >> /home/visionarr/.bashrc && \
-    echo 'echo ""' >> /home/visionarr/.bashrc && \
-    echo 'alias menu="python -m src.main --manual"' >> /home/visionarr/.bashrc
+# Put in multiple locations to work for any shell user
+RUN mkdir -p /home/visionarr /etc/skel && \
+    echo 'cd /app' > /tmp/bashrc && \
+    echo 'echo ""' >> /tmp/bashrc && \
+    echo 'echo " __      ___     _                            "' >> /tmp/bashrc && \
+    echo 'echo " \\ \\    / (_)   (_)                           "' >> /tmp/bashrc && \
+    echo 'echo "  \\ \\  / / _ ___ _  ___  _ __   __ _ _ __ _ __ "' >> /tmp/bashrc && \
+    echo 'echo "   \\ \\/ / | / __| |/ _ \\| ._  \\/ _. | .__| .__|"' >> /tmp/bashrc && \
+    echo 'echo "    \\  /  | \\__ \\ | (_) | | | | (_| |  |  |   "' >> /tmp/bashrc && \
+    echo 'echo "     \\/   |_|___/_|\\___/|_| |_|\\__,_|_|  |_|   "' >> /tmp/bashrc && \
+    echo 'echo ""' >> /tmp/bashrc && \
+    echo 'echo "  Dolby Vision Profile Converter"' >> /tmp/bashrc && \
+    echo 'echo "  by BeltaKoda | github.com/BeltaKoda/visionarr"' >> /tmp/bashrc && \
+    echo 'echo ""' >> /tmp/bashrc && \
+    echo 'echo "  Type: menu   - Launch interactive menu"' >> /tmp/bashrc && \
+    echo 'echo ""' >> /tmp/bashrc && \
+    echo 'alias menu="python -m src.main --manual"' >> /tmp/bashrc && \
+    cp /tmp/bashrc /root/.bashrc && \
+    cp /tmp/bashrc /home/visionarr/.bashrc && \
+    cp /tmp/bashrc /etc/skel/.bashrc && \
+    rm /tmp/bashrc
 
 # Default environment variables
 ENV PUID=99

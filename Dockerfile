@@ -24,7 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install dovi_tool
-ARG DOVI_TOOL_VERSION=2.1.2
+ARG DOVI_TOOL_VERSION=2.3.1
 RUN ARCH=$(dpkg --print-architecture) && \
     case "$ARCH" in \
         amd64) DOVI_ARCH="x86_64-unknown-linux-musl" ;; \

@@ -351,6 +351,9 @@ class Visionarr:
         """Run interactive manual mode."""
         print_banner(__version__)
         
+        # Start queue workers so jobs actually process
+        self.queue.start()
+        
         while True:
             setup_complete = self.state.is_initial_setup_complete
             

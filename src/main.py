@@ -608,8 +608,8 @@ class Visionarr:
                 media_id=0,
                 title=item['title']
             )
-            # Remove from discovered after queuing
-            self.state.remove_discovered(item['file_path'])
+            # Note: File is removed from discovered_files in _on_job_complete
+            # to handle container restarts gracefully
         
         print(f"✅ {len(selected)} file(s) added to queue")
         print("   💡 Use 'View Status' to monitor progress")

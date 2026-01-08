@@ -124,10 +124,6 @@ def validate_config(config: Config) -> bool:
     """
     errors = []
     
-    # Must have at least one *arr configured
-    if not config.has_radarr and not config.has_sonarr:
-        errors.append("No Radarr or Sonarr configured. Set RADARR_URL/RADARR_API_KEY or SONARR_URL/SONARR_API_KEY")
-    
     # Validate mount points (critical for Unraid docker.img safety)
     _validate_mount_point(config.config_dir, "CONFIG_DIR")
     _validate_mount_point(config.temp_dir, "TEMP_DIR")

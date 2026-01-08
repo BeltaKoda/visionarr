@@ -33,7 +33,7 @@ class ConversionJob:
     file_path: Path
     media_id: int
     title: str
-    monitor_type: Optional[str] = None  # "radarr" or "sonarr"
+    monitor_type: Optional[str] = None  # Source type (legacy, unused)
     status: JobStatus = JobStatus.PENDING
     error_message: Optional[str] = None
     created_at: datetime = field(default_factory=datetime.now)

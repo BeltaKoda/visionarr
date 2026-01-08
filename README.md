@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Automatic Dolby Vision Profile 7 → Profile 8 Converter</strong><br>
-  A daemon that monitors Radarr/Sonarr for new imports and converts DoVi for better device compatibility.
+  Automatically scans media libraries and converts DoVi for better device compatibility.
 </p>
 
 <p align="center">
@@ -50,10 +50,10 @@ Profile 7 MKV → Extract HEVC → Convert RPU Metadata → Remux → Profile 8 
 
 ## Features
 
-- 🔄 **Daemon Mode** - Automatic polling of Radarr/Sonarr for new imports
+- 🔄 **Scheduled Scans** - Delta scan every 30 min, full scan weekly
 - 🖥️ **Manual Mode** - Interactive console for one-off conversions
 - 🛡️ **Atomic Safety** - Original files backed up before replacement
-- 📊 **State Tracking** - SQLite database prevents reprocessing (unlike Unpackerr, file paths don't change after conversion, so we must track what's been processed)
+- 📊 **State Tracking** - SQLite database prevents reprocessing
 - 🔔 **Notifications** - Optional Discord/Slack webhooks
 - 🐳 **Docker Ready** - Includes Unraid template
 
@@ -70,10 +70,10 @@ Profile 7 MKV → Extract HEVC → Convert RPU Metadata → Remux → Profile 8 
 
 ```bash
 docker run -d \
-  -e RADARR_URL=http://your-radarr:7878 \
-  -e RADARR_API_KEY=your-api-key \
-  -v /path/to/media:/media \
-  beltakoda/visionarr
+  -v /path/to/movies:/movies \
+  -v /path/to/tv:/tv \
+  -v /path/to/config:/config \
+  ghcr.io/beltakoda/visionarr
 
 # Then complete initial setup:
 docker exec -it visionarr menu
@@ -83,11 +83,13 @@ docker exec -it visionarr menu
 
 See [.env.example](.env.example) for all available options.
 
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DELTA_SCAN_INTERVAL_MINUTES` | 30 | How often to scan for new files |
+| `FULL_SCAN_DAY` | sunday | Day of week for full library scan |
+| `FULL_SCAN_TIME` | 03:00 | Time for full scan (24h format) |
+| `BACKUP_ENABLED` | true | Keep .original backup files |
+
 ## License
 
-MIT License - See [LICENSE](LICENSE)
-
-## Credits
-
-- Inspired by [Unpackerr](https://github.com/Unpackerr/unpackerr)
-- Powered by [dovi_tool](https://github.com/quietvoid/dovi_tool)
+MIT

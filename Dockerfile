@@ -75,7 +75,7 @@ RUN mkdir -p /home/visionarr /etc/skel && \
     echo 'echo "  4. Complete Setup to enable automatic mode"' >> /tmp/bashrc && \
     echo 'echo ""' >> /tmp/bashrc && \
     echo 'echo "  After setup, Visionarr acts as a daemon and listens"' >> /tmp/bashrc && \
-    echo 'echo "  for new imports from Sonarr/Radarr automatically."' >> /tmp/bashrc && \
+    echo 'echo "  for new files on a scheduled basis."' >> /tmp/bashrc && \
     echo 'echo ""' >> /tmp/bashrc && \
     echo 'echo "  Type: menu   - Launch interactive menu"' >> /tmp/bashrc && \
     echo 'echo ""' >> /tmp/bashrc && \
@@ -88,12 +88,9 @@ RUN mkdir -p /home/visionarr /etc/skel && \
 # Default environment variables
 ENV PUID=99
 ENV PGID=100
-ENV RADARR_URL=""
-ENV RADARR_API_KEY=""
-ENV SONARR_URL=""
-ENV SONARR_API_KEY=""
-ENV POLL_INTERVAL_SECONDS="300"
-ENV LOOKBACK_MINUTES="60"
+ENV DELTA_SCAN_INTERVAL_MINUTES="30"
+ENV FULL_SCAN_DAY="sunday"
+ENV FULL_SCAN_TIME="03:00"
 ENV PROCESS_CONCURRENCY="1"
 ENV MIN_FREE_SPACE_GB="50"
 ENV CONFIG_DIR="/config"

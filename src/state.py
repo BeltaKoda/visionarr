@@ -359,6 +359,15 @@ class StateDB:
             """).fetchall()
             return [dict(row) for row in rows]
 
+    def is_discovered(self, file_path: str) -> bool:
+        """Check if a file is already in the discovered list."""
+        with self._get_connection() as conn:
+            result = conn.execute(
+                "SELECT 1 FROM discovered_files WHERE file_path = ?",
+                (file_path,)
+            ).fetchone()
+            return result is not None
+
     def remove_discovered(self, file_path: str) -> bool:
         """Remove a file from discovered list (after queuing for conversion)."""
         with self._get_connection() as conn:

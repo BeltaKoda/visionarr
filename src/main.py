@@ -2,7 +2,7 @@
 Visionarr - Dolby Vision Profile Converter
 
 Entry point for the application. Supports:
-- Daemon mode: Continuous polling of Radarr/Sonarr for new imports
+- Daemon mode: Scheduled filesystem scans for Profile 7 files
 - Manual mode: Interactive console for one-off operations
 """
 
@@ -20,9 +20,6 @@ from typing import List, Optional
 
 from .banner import print_banner
 from .config import Config, load_config, validate_config
-from .monitor.base import BaseMonitor, ImportedMedia
-from .monitor.radarr import RadarrMonitor
-from .monitor.sonarr import SonarrMonitor
 from .notifications import Notifier
 from .processor import DoViProfile, Processor
 from .queue_manager import ConversionJob, JobStatus, QueueManager
@@ -67,12 +64,9 @@ class Visionarr:
             backup_enabled=config.backup_enabled
         )
         
-        # Initialize monitors
-        self.monitors: List[BaseMonitor] = []
-        if config.has_radarr:
-            self.monitors.append(RadarrMonitor(config.radarr_url, config.radarr_api_key))
-        if config.has_sonarr:
-            self.monitors.append(SonarrMonitor(config.sonarr_url, config.sonarr_api_key))
+        # Scan tracking
+        self.last_delta_scan: Optional[datetime] = None
+        self.last_full_scan_date: Optional[str] = None  # Track by date string
         
         # Initialize queue
         self.queue = QueueManager(
@@ -131,15 +125,8 @@ class Visionarr:
     
     def _on_job_complete(self, job: ConversionJob) -> None:
         """Called when a job completes successfully."""
-        # Trigger rescan in the correct monitor
-        if job.monitor_type:
-            for monitor in self.monitors:
-                if monitor.name.lower() == job.monitor_type:
-                    try:
-                        monitor.trigger_rescan(job.media_id)
-                    except Exception as e:
-                        logger.warning(f"Failed to trigger rescan in {monitor.name}: {e}")
-                    break
+        # Remove from discovered files since it's now processed
+        self.state.remove_discovered(str(job.file_path))
         
         # Send notification
         if self.notifier:
@@ -161,7 +148,7 @@ class Visionarr:
             )
     
     def run_daemon(self) -> None:
-        """Run in daemon mode with continuous polling."""
+        """Run in daemon mode with scheduled filesystem scans."""
         print_banner(__version__)
         
         # Set running flag early so idle loop works
@@ -192,11 +179,6 @@ class Visionarr:
             
             logger.info("Initial setup detected! Starting auto-processing...")
         
-        # Test connections (warn but don't exit - will retry during polling)
-        for monitor in self.monitors:
-            if not monitor.test_connection():
-                logger.warning(f"Cannot connect to {monitor.name} - will retry during polling")
-        
         # Cleanup any orphaned files
         cleaned = self.processor.cleanup_orphaned_files()
         if cleaned:
@@ -213,17 +195,34 @@ class Visionarr:
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
         
-        logger.info(f"Daemon started. Polling every {self.config.poll_interval_seconds}s")
+        logger.info(f"Daemon started. Delta scan every {self.config.delta_scan_interval_minutes} min, "
+                    f"Full scan on {self.config.full_scan_day} at {self.config.full_scan_time}")
         
-        # Main polling loop
+        # Main scheduler loop
         while self.running:
             try:
-                self._poll_monitors()
+                now = datetime.now()
+                
+                # Check for full scan (weekly at configured time)
+                if self._should_run_full_scan(now):
+                    logger.info("Starting scheduled full library scan...")
+                    self._run_daemon_full_scan()
+                    self.last_full_scan_date = now.strftime("%Y-%m-%d")
+                
+                # Check for delta scan
+                if self._should_run_delta_scan(now):
+                    logger.info("Starting scheduled delta scan...")
+                    self._run_daemon_delta_scan()
+                    self.last_delta_scan = now
+                
+                # Process any discovered files that are pending
+                self._queue_pending_discoveries()
+                
             except Exception as e:
-                logger.error(f"Polling error: {e}")
+                logger.error(f"Scheduler error: {e}")
             
-            # Wait for next poll
-            for _ in range(self.config.poll_interval_seconds):
+            # Check every minute
+            for _ in range(60):
                 if not self.running:
                     break
                 time.sleep(1)
@@ -231,43 +230,99 @@ class Visionarr:
         # Shutdown
         self._shutdown()
     
-    def _poll_monitors(self) -> None:
-        """Poll all monitors for recent imports."""
-        detection_only = not self.state.is_initial_setup_complete
+    def _should_run_delta_scan(self, now: datetime) -> bool:
+        """Check if it's time for a delta scan."""
+        if self.last_delta_scan is None:
+            return True  # First scan
         
-        for monitor in self.monitors:
+        elapsed = (now - self.last_delta_scan).total_seconds() / 60
+        return elapsed >= self.config.delta_scan_interval_minutes
+    
+    def _should_run_full_scan(self, now: datetime) -> bool:
+        """Check if it's time for a full scan (weekly at configured time)."""
+        # Check if it's the right day of week
+        day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+        current_day = day_names[now.weekday()]
+        
+        if current_day != self.config.full_scan_day.lower():
+            return False
+        
+        # Check if we're at or past the scheduled time
+        try:
+            hour, minute = map(int, self.config.full_scan_time.split(":"))
+            scheduled_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        except ValueError:
+            scheduled_time = now.replace(hour=3, minute=0, second=0, microsecond=0)
+        
+        if now < scheduled_time:
+            return False
+        
+        # Check if we've already run today
+        today = now.strftime("%Y-%m-%d")
+        return self.last_full_scan_date != today
+    
+    def _run_daemon_delta_scan(self) -> None:
+        """Run a delta scan - skip already processed/discovered files."""
+        for mkv_file in self._find_all_mkvs():
+            if not self.running:
+                break
+            
+            file_path_str = str(mkv_file)
+            
+            # Skip if already processed or discovered
+            if self.state.is_processed(file_path_str):
+                continue
+            if self.state.is_discovered(file_path_str):
+                continue
+            
             try:
-                imports = monitor.get_recent_imports(self.config.lookback_minutes)
-                
-                for media in imports:
-                    # Skip if already processed or queued
-                    if self.state.is_processed(str(media.file_path)):
-                        continue
-                    
-                    # In detection-only mode, just log what we find
-                    if detection_only:
-                        # Quick check if it's DoVi Profile 7
-                        try:
-                            analysis = self.processor.analyze_file(media.file_path)
-                            if analysis.needs_conversion:
-                                logger.info(
-                                    f"[DETECTION-ONLY] Found Profile 7: {media.title} "
-                                    f"- Run manual mode to convert"
-                                )
-                        except Exception as e:
-                            logger.debug(f"Could not analyze {media.title}: {e}")
-                        continue
-                    
-                    # Normal mode: Add to queue
-                    self.queue.add_job(
-                        file_path=media.file_path,
-                        media_id=media.media_id,
-                        title=media.title,
-                        monitor_type=monitor.name.lower()
-                    )
-                    
+                analysis = self.processor.analyze_file(mkv_file)
+                if analysis.needs_conversion:
+                    self.state.add_discovered(file_path_str, mkv_file.stem)
+                    logger.info(f"Found Profile 7: {mkv_file.name}")
             except Exception as e:
-                logger.error(f"Error polling {monitor.name}: {e}")
+                logger.debug(f"Error analyzing {mkv_file.name}: {e}")
+    
+    def _run_daemon_full_scan(self) -> None:
+        """Run a full scan - re-check everything including processed files."""
+        for mkv_file in self._find_all_mkvs():
+            if not self.running:
+                break
+            
+            file_path_str = str(mkv_file)
+            
+            try:
+                analysis = self.processor.analyze_file(mkv_file)
+                if analysis.needs_conversion:
+                    if not self.state.is_discovered(file_path_str) and not self.state.is_processed(file_path_str):
+                        self.state.add_discovered(file_path_str, mkv_file.stem)
+                        logger.info(f"Found Profile 7: {mkv_file.name}")
+            except Exception as e:
+                logger.debug(f"Error analyzing {mkv_file.name}: {e}")
+    
+    def _find_all_mkvs(self) -> List[Path]:
+        """Find all MKV files in media directories."""
+        movies_dir = Path("/movies")
+        tv_dir = Path("/tv")
+        
+        files = []
+        if movies_dir.exists():
+            files.extend(movies_dir.rglob("*.mkv"))
+        if tv_dir.exists():
+            files.extend(tv_dir.rglob("*.mkv"))
+        return files
+    
+    def _queue_pending_discoveries(self) -> None:
+        """Queue any discovered files for conversion."""
+        discovered = self.state.get_discovered()
+        for item in discovered:
+            file_path = Path(item['file_path'])
+            if file_path.exists():
+                self.queue.add_job(
+                    file_path=file_path,
+                    media_id=0,
+                    title=item['title']
+                )
     
     def _signal_handler(self, signum, frame) -> None:
         """Handle shutdown signals."""
@@ -309,16 +364,17 @@ class Visionarr:
                 print("-" * 50)
             
             print("  1. 🧪 Test Scan (X files) (⭐️ Recommended First)")
-            print(f"  2. 🔍 Scan Recent Imports (last {self.config.lookback_minutes} min)")
-            print("  3. 📚 Scan Entire Library (⚠️ Heavy)")
-            print("  4. 📝 Manual Conversion (Select & Convert)")
+            print("  2. 📚 Scan Entire Library")
+            print("  3. 📝 Manual Conversion (Select & Convert)")
+            print("  4. 📋 View Discovered Files")
             print("  5. 📊 View Status (Live)")
-            print("  6. 🗄️  Database Management ▶")
-            print("  7. 🚪 Exit")
+            print("  6. ⚙️  Settings")
+            print("  7. 🗄️  Database Management")
+            print("  8. 🚪 Exit")
             
             if not setup_complete:
                 print("-" * 50)
-                print("  8. ✅ Complete Required Initial Setup (enable auto-mode)")
+                print("  9. ✅ Complete Required Initial Setup (enable auto-mode)")
             
             print("=" * 50)
             
@@ -327,19 +383,21 @@ class Visionarr:
             if choice == "1":
                 self._manual_test_scan()
             elif choice == "2":
-                self._manual_scan_recent()
-            elif choice == "3":
                 self._manual_scan_library()
-            elif choice == "4":
+            elif choice == "3":
                 self._manual_select_convert()
+            elif choice == "4":
+                self._manual_view_db()
             elif choice == "5":
                 self._manual_view_status_live()
             elif choice == "6":
-                self._manual_db_management()
+                self._manual_settings()
             elif choice == "7":
+                self._manual_db_management()
+            elif choice == "8":
                 print("\nGoodbye!")
                 break
-            elif choice == "8" and not setup_complete:
+            elif choice == "9" and not setup_complete:
                 self._complete_initial_setup()
             else:
                 print("\nInvalid option")
@@ -606,58 +664,103 @@ class Visionarr:
             # Restore terminal settings
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
 
-    def _manual_scan_recent(self) -> None:
-        """Scan recent imports from monitors."""
-        print(f"\nScanning imports from last {self.config.lookback_minutes} minutes...")
+    def _manual_view_db(self) -> None:
+        """View discovered Profile 7 files in database with pagination."""
+        discovered = self.state.get_discovered()
         
-        profile7_files = []  # Collect all Profile 7 files first
+        print("\n" + "=" * 55)
+        print("       VIEW DISCOVERED FILES        ")
+        print("=" * 55)
         
-        for monitor in self.monitors:
-            if not monitor.test_connection():
-                print(f"  ❌ Cannot connect to {monitor.name}")
-                continue
+        if not discovered:
+            print("\nNo Profile 7 files in database.")
+            print("Run a scan to discover files needing conversion.")
+            input("\nPress Enter to continue...")
+            return
+        
+        print(f"\nFound {len(discovered)} Profile 7 file(s) in database")
+        print("-" * 55)
+        
+        # Pagination (5 per page)
+        page_size = 5
+        total_pages = (len(discovered) + page_size - 1) // page_size
+        current_page = 0
+        
+        while True:
+            print(f"\nPage {current_page + 1}/{total_pages}:")
+            start_idx = current_page * page_size
+            end_idx = min(start_idx + page_size, len(discovered))
             
-            imports = monitor.get_recent_imports(self.config.lookback_minutes)
-            print(f"\n{monitor.name}: {len(imports)} recent imports")
+            for i in range(start_idx, end_idx):
+                item = discovered[i]
+                title = item['title'][:45] + "..." if len(item['title']) > 45 else item['title']
+                print(f"  {i+1}. {title}")
+                print(f"      {item['file_path'][:60]}...")
             
-            for media in imports:
-                if self.state.is_processed(str(media.file_path)):
-                    print(f"  ✓ {media.title} (already processed)")
-                    continue
-                
+            print("-" * 55)
+            print("n=next, p=prev, q=quit")
+            
+            cmd = input("> ").strip().lower()
+            
+            if cmd == "n":
+                if current_page < total_pages - 1:
+                    current_page += 1
+            elif cmd == "p":
+                if current_page > 0:
+                    current_page -= 1
+            elif cmd == "q":
+                return
+    
+    def _manual_settings(self) -> None:
+        """Settings submenu to adjust scan frequencies."""
+        while True:
+            print("\n" + "=" * 50)
+            print("           SETTINGS           ")
+            print("=" * 50)
+            print(f"  1. Delta Scan Interval: {self.config.delta_scan_interval_minutes} min")
+            print(f"  2. Full Scan Day: {self.config.full_scan_day.capitalize()}")
+            print(f"  3. Full Scan Time: {self.config.full_scan_time}")
+            print("  4. ← Back")
+            print("=" * 50)
+            print("\nNote: Changes here apply to this session only.")
+            print("For permanent changes, edit environment variables.")
+            
+            choice = input("\nSelect option: ").strip()
+            
+            if choice == "1":
                 try:
-                    analysis = self.processor.analyze_file(media.file_path)
-                    
-                    if analysis.needs_conversion:
-                        print(f"  ⚡ {media.title} - Profile 7 DETECTED")
-                        profile7_files.append(media)
-                        # Save to DB for Manual Conversion selection
-                        self.state.add_discovered(str(media.file_path), media.title)
+                    val = input("Enter delta scan interval (minutes): ").strip()
+                    minutes = int(val)
+                    if 1 <= minutes <= 1440:
+                        self.config.delta_scan_interval_minutes = minutes
+                        print(f"✅ Delta scan interval set to {minutes} minutes")
                     else:
-                        status = "Profile 8" if analysis.has_dovi else "No DoVi"
-                        print(f"  ○ {media.title} ({status})")
-                except Exception as e:
-                    print(f"  ❌ {media.title} - Error: {str(e)[:50]}")
-        
-        # Offer to queue all Profile 7 files at once
-        if profile7_files:
-            print(f"\n{'=' * 50}")
-            print(f"Found {len(profile7_files)} Profile 7 file(s) needing conversion")
-            print(f"{'=' * 50}")
-            confirm = input(f"\nQueue all {len(profile7_files)} for conversion? (y/n): ").strip().lower()
-            if confirm == "y":
-                for media in profile7_files:
-                    self.queue.add_job(
-                        file_path=media.file_path,
-                        media_id=media.media_id,
-                        title=media.title
-                    )
-                print(f"✅ {len(profile7_files)} files added to queue")
-                print("   💡 Use 'View Status' to monitor progress")
-        else:
-            print("\n✅ No Profile 7 files need conversion")
-        
-        input("\nPress Enter to continue...")
+                        print("Must be between 1 and 1440 minutes")
+                except ValueError:
+                    print("Invalid number")
+            elif choice == "2":
+                days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+                print("Days: " + ", ".join(days))
+                day = input("Enter day of week: ").strip().lower()
+                if day in days:
+                    self.config.full_scan_day = day
+                    print(f"✅ Full scan day set to {day.capitalize()}")
+                else:
+                    print("Invalid day")
+            elif choice == "3":
+                time_str = input("Enter time (HH:MM, 24h format): ").strip()
+                try:
+                    hour, minute = map(int, time_str.split(":"))
+                    if 0 <= hour <= 23 and 0 <= minute <= 59:
+                        self.config.full_scan_time = time_str
+                        print(f"✅ Full scan time set to {time_str}")
+                    else:
+                        print("Invalid time range")
+                except ValueError:
+                    print("Invalid format. Use HH:MM")
+            elif choice == "4":
+                break
+
 
     def _manual_db_management(self) -> None:
         """Database management submenu."""

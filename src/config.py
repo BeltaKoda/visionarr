@@ -16,20 +16,13 @@ from typing import Optional
 class Config:
     """Application configuration loaded from environment variables."""
     
-    # Radarr settings (required for movie support)
-    radarr_url: Optional[str] = None
-    radarr_api_key: Optional[str] = None
-    
-    # Sonarr settings (optional, for TV support)
-    sonarr_url: Optional[str] = None
-    sonarr_api_key: Optional[str] = None
+    # Scheduled scan settings
+    delta_scan_interval_minutes: int = 30  # How often to run delta scans (skip known files)
+    full_scan_day: str = "sunday"          # Day of week for full scan (monday-sunday)
+    full_scan_time: str = "03:00"          # Time for full scan (24h format)
     
     # Operation mode
     manual_mode: bool = False
-    
-    # Polling configuration
-    poll_interval_seconds: int = 300
-    lookback_minutes: int = 60
     
     # Processing configuration
     process_concurrency: int = 1
@@ -55,16 +48,6 @@ class Config:
     def database_path(self) -> Path:
         """Path to SQLite database."""
         return self.config_dir / "visionarr.db"
-    
-    @property
-    def has_radarr(self) -> bool:
-        """Check if Radarr is configured."""
-        return bool(self.radarr_url and self.radarr_api_key)
-    
-    @property
-    def has_sonarr(self) -> bool:
-        """Check if Sonarr is configured."""
-        return bool(self.sonarr_url and self.sonarr_api_key)
 
 
 def _parse_bool(value: str) -> bool:
@@ -102,20 +85,13 @@ def _validate_mount_point(path: Path, name: str) -> None:
 def load_config() -> Config:
     """Load configuration from environment variables."""
     config = Config(
-        # Radarr
-        radarr_url=os.getenv("RADARR_URL"),
-        radarr_api_key=os.getenv("RADARR_API_KEY"),
-        
-        # Sonarr
-        sonarr_url=os.getenv("SONARR_URL"),
-        sonarr_api_key=os.getenv("SONARR_API_KEY"),
+        # Scheduled scans
+        delta_scan_interval_minutes=int(os.getenv("DELTA_SCAN_INTERVAL_MINUTES", "30")),
+        full_scan_day=os.getenv("FULL_SCAN_DAY", "sunday").lower(),
+        full_scan_time=os.getenv("FULL_SCAN_TIME", "03:00"),
         
         # Operation mode
         manual_mode=_parse_bool(os.getenv("MANUAL_MODE", "false")),
-        
-        # Polling
-        poll_interval_seconds=int(os.getenv("POLL_INTERVAL_SECONDS", "300")),
-        lookback_minutes=int(os.getenv("LOOKBACK_MINUTES", "60")),
         
         # Processing
         process_concurrency=int(os.getenv("PROCESS_CONCURRENCY", "1")),

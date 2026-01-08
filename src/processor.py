@@ -326,8 +326,8 @@ class Processor:
             rpu_p8_path = work_dir / "rpu_p8.bin"
             self._run_command(
                 [
-                    "dovi_tool", "convert",
-                    "--mode", "2",  # Mode 2 = Profile 7 to 8.1
+                    "dovi_tool", "--mode", "2",  # Mode 2 = Profile 7 to 8.1 (global option)
+                    "convert",
                     "-i", str(rpu_path),
                     "-o", str(rpu_p8_path)
                 ],

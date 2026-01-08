@@ -612,8 +612,12 @@ class Visionarr:
             # to handle container restarts gracefully
         
         print(f"✅ {len(selected)} file(s) added to queue")
-        print("   💡 Use 'View Status' to monitor progress")
-        input("\nPress Enter to continue...")
+        print("\n  m = Return to menu")
+        print("  s = View live status")
+        
+        choice = input("\nSelect option: ").strip().lower()
+        if choice == "s":
+            self._manual_view_status_live()
 
     def _manual_view_status_live(self) -> None:
         """Live view of queue and processing status."""

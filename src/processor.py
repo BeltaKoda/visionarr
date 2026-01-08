@@ -291,13 +291,12 @@ class Processor:
         try:
             # Paths for intermediate files
             hevc_path = work_dir / "video.hevc"
-            rpu_path = work_dir / "rpu.bin"
             hevc_p8_path = work_dir / "video_p8.hevc"
             output_partial = file_path.with_suffix(".mkv.partial")
             output_backup = file_path.with_suffix(".mkv.original")
             
             # Step 1: Extract HEVC stream
-            logger.info("Step 1/5: Extracting HEVC stream...")
+            logger.info("Step 1/3: Extracting HEVC stream...")
             self._run_command(
                 [
                     "ffmpeg", "-y",
@@ -310,44 +309,21 @@ class Processor:
                 "HEVC extraction"
             )
             
-            # Step 2: Extract RPU (Dolby Vision metadata)
-            logger.info("Step 2/5: Extracting RPU metadata...")
+            # Step 2: Convert Profile 7 to Profile 8 (single command handles everything)
+            # --mode 2 converts to Profile 8.1, --discard removes enhancement layer
+            logger.info("Step 2/3: Converting to Profile 8...")
             self._run_command(
                 [
-                    "dovi_tool", "extract-rpu",
+                    "dovi_tool", "-m", "2",  # Mode 2 = Profile 7 to 8.1
+                    "convert", "--discard",   # Discard enhancement layer
                     "-i", str(hevc_path),
-                    "-o", str(rpu_path)
-                ],
-                "RPU extraction"
-            )
-            
-            # Step 3: Convert RPU from Profile 7 to Profile 8
-            logger.info("Step 3/5: Converting RPU to Profile 8...")
-            rpu_p8_path = work_dir / "rpu_p8.bin"
-            self._run_command(
-                [
-                    "dovi_tool", "--mode", "2",  # Mode 2 = Profile 7 to 8.1 (global option)
-                    "convert",
-                    "-i", str(rpu_path),
-                    "-o", str(rpu_p8_path)
-                ],
-                "RPU conversion"
-            )
-            
-            # Step 4: Inject new RPU back into HEVC
-            logger.info("Step 4/5: Injecting Profile 8 RPU...")
-            self._run_command(
-                [
-                    "dovi_tool", "inject-rpu",
-                    "-i", str(hevc_path),
-                    "--rpu-in", str(rpu_p8_path),
                     "-o", str(hevc_p8_path)
                 ],
-                "RPU injection"
+                "Profile 7 to 8 conversion"
             )
             
-            # Step 5: Remux with original audio/subtitles
-            logger.info("Step 5/5: Remuxing final MKV...")
+            # Step 3: Remux with original audio/subtitles
+            logger.info("Step 3/3: Remuxing final MKV...")
             self._run_command(
                 [
                     "mkvmerge",

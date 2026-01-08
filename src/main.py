@@ -366,7 +366,7 @@ class Visionarr:
                 print("   Auto-conversion is disabled until you complete setup.")
                 print("-" * 50)
             
-            print("  1. 🧪 Test Scan (X files) (⭐️ Recommended First)")
+            print("  1. 🔍 Quick Scan (limited files) ⭐ Good for first run")
             print("  2. 📚 Scan Entire Library")
             print("  3. 📝 Manual Conversion (Select & Convert)")
             print("  4. 📋 View Discovered Files")
@@ -406,12 +406,12 @@ class Visionarr:
                 print("\nInvalid option")
 
     def _manual_test_scan(self) -> None:
-        """Test scan with user-defined limit."""
+        """Quick scan with user-defined limit."""
         print("\n" + "=" * 50)
-        print("TEST SCAN")
+        print("QUICK SCAN")
         print("=" * 50)
-        print("This will scan a limited number of files to verify access")
-        print("and detection without scanning your entire library.")
+        print("Scan a limited number of files - great for first run")
+        print("to verify detection works before scanning entire library.")
         
         try:
             limit = int(input("\nHow many files to scan? (e.g., 50): ").strip())

@@ -274,11 +274,9 @@ class Processor:
         
         Pipeline:
         1. Extract HEVC stream (ffmpeg - stream copy)
-        2. Extract RPU (dovi_tool)
-        3. Convert RPU Profile 7 -> 8 (dovi_tool)
-        4. Inject new RPU into HEVC (dovi_tool)
-        5. Remux with original audio/subs (mkvmerge)
-        6. Atomic swap with backup
+        2. Convert to Profile 8 (dovi_tool -m 2 convert --discard)
+        3. Remux with original audio/subs (mkvmerge)
+        4. Atomic swap with backup
         
         Returns the path to the converted file.
         """

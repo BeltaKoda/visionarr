@@ -164,8 +164,8 @@ class Visionarr:
             logger.warning("  Run: docker exec -it visionarr menu")
             logger.warning("")
             logger.warning("In the menu:")
-            logger.warning("  1. Do a Test Scan to verify detection works")
-            logger.warning("  2. Complete Required Initial Setup")
+            logger.warning("  1. Do a Quick Scan to verify detection works")
+            logger.warning("  2. Enable Auto-Processing")
             logger.warning("")
             logger.warning("Waiting for initial setup...")
             logger.warning("=" * 60)
@@ -281,7 +281,7 @@ class Visionarr:
                     self.state.add_discovered(file_path_str, mkv_file.stem)
                     logger.info(f"Found Profile 7: {mkv_file.name}")
             except Exception as e:
-                logger.debug(f"Error analyzing {mkv_file.name}: {e}")
+                logger.warning(f"Error analyzing {mkv_file.name}: {e}")
     
     def _run_daemon_full_scan(self) -> None:
         """Run a full scan - re-check everything including processed files."""
@@ -298,7 +298,7 @@ class Visionarr:
                         self.state.add_discovered(file_path_str, mkv_file.stem)
                         logger.info(f"Found Profile 7: {mkv_file.name}")
             except Exception as e:
-                logger.debug(f"Error analyzing {mkv_file.name}: {e}")
+                logger.warning(f"Error analyzing {mkv_file.name}: {e}")
     
     def _find_all_mkvs(self) -> List[Path]:
         """Find all MKV files in media directories."""

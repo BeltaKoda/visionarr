@@ -40,7 +40,7 @@ This dual-layer design works great in physical Blu-ray players, but causes probl
 ## How It Works
 
 ```
-Profile 7 MKV → Extract HEVC → Convert RPU Metadata → Remux → Profile 8 MKV
+Profile 7 MKV → Extract HEVC → Convert to Profile 8 → Remux → Profile 8 MKV
 ```
 
 **No transcoding occurs.** The video stream is copied bit-for-bit. Only the Dolby Vision metadata (RPU) is modified, meaning:
@@ -73,6 +73,7 @@ docker run -d \
   -v /path/to/movies:/movies \
   -v /path/to/tv:/tv \
   -v /path/to/config:/config \
+  -v /path/to/temp:/temp \
   ghcr.io/beltakoda/visionarr
 
 # Then complete initial setup:

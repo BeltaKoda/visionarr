@@ -362,8 +362,11 @@ class Visionarr:
             print("=" * 50)
             
             if not setup_complete:
-                print("⚠️  INITIAL SETUP NOT COMPLETE")
-                print("   Auto-conversion is disabled until you complete setup.")
+                print("⚠️  AUTO-PROCESSING: OFF")
+                print("   Enable to run scans automatically in daemon mode.")
+                print("-" * 50)
+            else:
+                print("✅ AUTO-PROCESSING: ON")
                 print("-" * 50)
             
             print("  1. 🔍 Quick Scan (limited files) ⭐ Good for first run")
@@ -374,10 +377,12 @@ class Visionarr:
             print("  6. ⚙️  Settings")
             print("  7. 🗄️  Database Management")
             print("  8. 🚪 Exit")
+            print("-" * 50)
             
-            if not setup_complete:
-                print("-" * 50)
-                print("  9. ✅ Complete Required Initial Setup (enable auto-mode)")
+            if setup_complete:
+                print("  9. 🔴 Disable Auto-Processing")
+            else:
+                print("  9. 🟢 Enable Auto-Processing")
             
             print("=" * 50)
             
@@ -400,10 +405,42 @@ class Visionarr:
             elif choice == "8":
                 print("\nGoodbye!")
                 break
-            elif choice == "9" and not setup_complete:
-                self._complete_initial_setup()
+            elif choice == "9":
+                self._toggle_auto_mode(setup_complete)
             else:
                 print("\nInvalid option")
+
+    def _toggle_auto_mode(self, currently_enabled: bool) -> None:
+        """Toggle auto-processing mode on/off."""
+        print("\n" + "=" * 50)
+        
+        if currently_enabled:
+            print("DISABLE AUTO-PROCESSING")
+            print("=" * 50)
+            print("This will stop the daemon from automatically scanning")
+            print("and converting files. Manual conversion will still work.")
+            print("")
+            confirm = input("Disable auto-processing? (y/n): ").strip().lower()
+            if confirm == "y":
+                self.state.reset_initial_setup()
+                print("\n🔴 Auto-processing DISABLED")
+                print("   Daemon will not auto-scan until re-enabled.")
+        else:
+            print("ENABLE AUTO-PROCESSING")
+            print("=" * 50)
+            print("This will allow the daemon to automatically scan for")
+            print("Profile 7 files and convert them based on schedule settings.")
+            print("")
+            print("⚠️  Make sure you've done a Quick Scan first to verify")
+            print("   detection works correctly on your library!")
+            print("")
+            confirm = input("Enable auto-processing? (y/n): ").strip().lower()
+            if confirm == "y":
+                self.state.mark_initial_setup_complete()
+                print("\n🟢 Auto-processing ENABLED")
+                print("   Daemon will now auto-scan based on schedule settings.")
+        
+        input("\nPress Enter to continue...")
 
     def _manual_test_scan(self) -> None:
         """Quick scan with user-defined limit."""

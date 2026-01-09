@@ -758,13 +758,17 @@ class Visionarr:
     def _manual_settings(self) -> None:
         """Settings submenu to adjust scan frequencies."""
         while True:
+            # Show backup status with warning
+            backup_status = "ON ⚠️  (doubles storage)" if self.config.backup_enabled else "OFF"
+            
             print("\n" + "=" * 50)
             print("           SETTINGS           ")
             print("=" * 50)
             print(f"  1. Delta Scan Interval: {self.config.delta_scan_interval_minutes} min")
             print(f"  2. Full Scan Day: {self.config.full_scan_day.capitalize()}")
             print(f"  3. Full Scan Time: {self.config.full_scan_time}")
-            print("  4. ← Back")
+            print(f"  4. Backup Originals: {backup_status}")
+            print("  5. ← Back")
             print("=" * 50)
             print("\nNote: Changes here apply to this session only.")
             print("For permanent changes, edit environment variables.")
@@ -803,7 +807,46 @@ class Visionarr:
                 except ValueError:
                     print("Invalid format. Use HH:MM")
             elif choice == "4":
+                self._toggle_backup_setting()
+            elif choice == "5":
                 break
+
+    def _toggle_backup_setting(self) -> None:
+        """Toggle backup of original files with storage warning."""
+        print("\n" + "=" * 50)
+        print("BACKUP ORIGINAL FILES")
+        print("=" * 50)
+        
+        if self.config.backup_enabled:
+            print("Currently: ENABLED")
+            print("")
+            print("When enabled, original files are renamed to .mkv.original")
+            print("after conversion. This preserves the original in case of issues.")
+            print("")
+            print("Disabling this will DELETE original files after conversion.")
+            print("")
+            confirm = input("Disable backups? (y/n): ").strip().lower()
+            if confirm == "y":
+                self.config.backup_enabled = False
+                self.processor.backup_enabled = False
+                print("\n🔴 Backups DISABLED - originals will be deleted after conversion")
+        else:
+            print("Currently: DISABLED")
+            print("")
+            print("⚠️  WARNING: Enabling backups will DOUBLE your storage requirements!")
+            print("")
+            print("Example: A 50GB movie will use 100GB total (original + converted)")
+            print("")
+            print("This is recommended for safety but may not be practical for")
+            print("large libraries with limited storage.")
+            print("")
+            confirm = input("Enable backups? (y/n): ").strip().lower()
+            if confirm == "y":
+                self.config.backup_enabled = True
+                self.processor.backup_enabled = True
+                print("\n🟢 Backups ENABLED - originals kept as .mkv.original")
+        
+        input("\nPress Enter to continue...")
 
 
     def _manual_db_management(self) -> None:

@@ -787,15 +787,21 @@ class Visionarr:
             
             for i in range(start_idx, end_idx):
                 item = processed[i]
-                title = item.file_path.split("/")[-1] # Simple stem extraction
+                file_path = Path(item.file_path)
+                title = file_path.name
                 if len(title) > 45:
                     title = title[:42] + "..."
+                
+                # Check for backup file
+                backup_path = file_path.with_suffix(".mkv.original")
+                backup_status = "YES" if backup_path.exists() else "NO"
+                
                 processed_at = item.processed_at.strftime("%Y-%m-%d %H:%M")
                 print(f"  {i+1}. {title}")
-                print(f"      Profile: {item.original_profile} -> {item.new_profile} | {processed_at}")
+                print(f"      Profile: {item.original_profile} -> {item.new_profile} | {processed_at} | Backup: {backup_status}")
             
             print("-" * 55)
-            print("n=next, p=prev, q=quit")
+            print("n=next, p=prev, c=cleanup backups, q=quit")
             
             cmd = input("> ").strip().lower()
             
@@ -805,8 +811,64 @@ class Visionarr:
             elif cmd == "p":
                 if current_page > 0:
                     current_page -= 1
+            elif cmd == "c":
+                self._manual_cleanup_backups()
+                # Refresh list after cleanup
+                processed = self.state.get_processed_files()
+                if not processed:
+                    return
+                total_pages = (len(processed) + page_size - 1) // page_size
+                current_page = min(current_page, total_pages - 1)
             elif cmd == "q":
                 return
+
+    def _manual_cleanup_backups(self) -> None:
+        """Bulk cleanup of .mkv.original backup files."""
+        processed = self.state.get_processed_files(limit=1000)
+        backups_found = []
+        total_size = 0
+        
+        print("\n" + "=" * 50)
+        print("        BACKUP CLEANUP          ")
+        print("=" * 50)
+        print("Scanning for existing .mkv.original files...")
+        
+        for item in processed:
+            backup_path = Path(item.file_path).with_suffix(".mkv.original")
+            if backup_path.exists():
+                backups_found.append(backup_path)
+                total_size += backup_path.stat().st_size
+        
+        if not backups_found:
+            print("\nNo original backup files found.")
+            input("\nPress Enter to continue...")
+            return
+        
+        size_gb = total_size / (1024**3)
+        print(f"\nFound {len(backups_found)} backup file(s)")
+        print(f"Total space to reclaim: {size_gb:.2f} GB")
+        print("\n⚠️  WARNING: This will permanently delete original files.")
+        print("   Make sure your converted files are working correctly!")
+        
+        confirm = input("\nDelete all original backups? (y/n): ").strip().lower()
+        if confirm != "y":
+            print("Cleanup cancelled.")
+            return
+            
+        print("\nDeleting backups...")
+        deleted_count = 0
+        for path in backups_found:
+            try:
+                path.unlink()
+                deleted_count += 1
+                if deleted_count % 5 == 0:
+                    print(f"  Progress: {deleted_count}/{len(backups_found)}...")
+            except Exception as e:
+                logger.error(f"Failed to delete {path}: {e}")
+                
+        print(f"\n✅ Cleaned up {deleted_count} backup files.")
+        print(f"   Reclaimed {size_gb:.2f} GB of space.")
+        input("\nPress Enter to continue...")
     
     def _manual_settings(self) -> None:
         """Settings submenu to adjust scan frequencies."""

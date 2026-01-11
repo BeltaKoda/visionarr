@@ -373,16 +373,17 @@ class Visionarr:
             print("  2. 📚 Scan Entire Library")
             print("  3. 📝 Manual Conversion (Select & Convert)")
             print("  4. 📋 View Discovered Files")
-            print("  5. 📊 View Status (Live)")
-            print("  6. ⚙️  Settings")
-            print("  7. 🗄️  Database Management")
-            print("  8. 🚪 Exit")
+            print("  5. ✅ View Processed Files")
+            print("  6. 📊 View Status (Live)")
+            print("  7. ⚙️  Settings")
+            print("  8. 🗄️  Database Management")
+            print("  9. 🚪 Exit")
             print("-" * 50)
             
             if setup_complete:
-                print("  9. 🔴 Disable Auto-Processing")
+                print("  0. 🔴 Disable Auto-Processing")
             else:
-                print("  9. 🟢 Enable Auto-Processing")
+                print("  0. 🟢 Enable Auto-Processing")
             
             print("=" * 50)
             
@@ -397,15 +398,17 @@ class Visionarr:
             elif choice == "4":
                 self._manual_view_db()
             elif choice == "5":
-                self._manual_view_status_live()
+                self._manual_view_processed()
             elif choice == "6":
-                self._manual_settings()
+                self._manual_view_status_live()
             elif choice == "7":
-                self._manual_db_management()
+                self._manual_settings()
             elif choice == "8":
+                self._manual_db_management()
+            elif choice == "9":
                 print("\nGoodbye!")
                 break
-            elif choice == "9":
+            elif choice == "0":
                 self._toggle_auto_mode(setup_complete)
             else:
                 print("\nInvalid option")
@@ -740,6 +743,56 @@ class Visionarr:
                 title = item['title'][:45] + "..." if len(item['title']) > 45 else item['title']
                 print(f"  {i+1}. {title}")
                 print(f"      {item['file_path'][:60]}...")
+            
+            print("-" * 55)
+            print("n=next, p=prev, q=quit")
+            
+            cmd = input("> ").strip().lower()
+            
+            if cmd == "n":
+                if current_page < total_pages - 1:
+                    current_page += 1
+            elif cmd == "p":
+                if current_page > 0:
+                    current_page -= 1
+            elif cmd == "q":
+                return
+
+    def _manual_view_processed(self) -> None:
+        """View successfully converted files in database with pagination."""
+        processed = self.state.get_processed_files()
+        
+        print("\n" + "=" * 55)
+        print("       VIEW CONVERTED FILES          ")
+        print("=" * 55)
+        
+        if not processed:
+            print("\nNo files have been converted yet.")
+            print("Completed conversions will appear here.")
+            input("\nPress Enter to continue...")
+            return
+        
+        print(f"\nFound {len(processed)} converted file(s) in database")
+        print("-" * 55)
+        
+        # Pagination (5 per page)
+        page_size = 5
+        total_pages = (len(processed) + page_size - 1) // page_size
+        current_page = 0
+        
+        while True:
+            print(f"\nPage {current_page + 1}/{total_pages}:")
+            start_idx = current_page * page_size
+            end_idx = min(start_idx + page_size, len(processed))
+            
+            for i in range(start_idx, end_idx):
+                item = processed[i]
+                title = item.file_path.split("/")[-1] # Simple stem extraction
+                if len(title) > 45:
+                    title = title[:42] + "..."
+                processed_at = item.processed_at.strftime("%Y-%m-%d %H:%M")
+                print(f"  {i+1}. {title}")
+                print(f"      Profile: {item.original_profile} -> {item.new_profile} | {processed_at}")
             
             print("-" * 55)
             print("n=next, p=prev, q=quit")

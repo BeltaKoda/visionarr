@@ -42,6 +42,7 @@ class StateDB:
     def __init__(self, db_path: Path):
         self.db_path = db_path
         self._init_db()
+        self._init_settings_defaults()
     
     def _init_db(self) -> None:
         """Initialize database schema if not exists."""
@@ -94,6 +95,51 @@ class StateDB:
             raise
         finally:
             conn.close()
+    
+    # -------------------------------------------------------------------------
+    # Settings (Persistent)
+    # -------------------------------------------------------------------------
+    
+    # Default settings values
+    SETTINGS_DEFAULTS = {
+        "auto_process_mode": "off",      # off, all, movies, shows
+        "backup_enabled": "true",         # true, false
+        "delta_scan_interval": "30",      # minutes
+        "full_scan_day": "sunday",        # day name
+        "full_scan_time": "03:00",        # HH:MM
+    }
+    
+    def _init_settings_defaults(self) -> None:
+        """Initialize settings with defaults if not already set."""
+        for key, default_value in self.SETTINGS_DEFAULTS.items():
+            if self.get_setting(key) is None:
+                self.set_setting(key, default_value)
+    
+    def get_setting(self, key: str) -> Optional[str]:
+        """Get a setting value by key. Returns None if not found."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT value FROM settings WHERE key = ?",
+                (key,)
+            )
+            row = cursor.fetchone()
+            return row["value"] if row else None
+    
+    def set_setting(self, key: str, value: str) -> None:
+        """Set a setting value."""
+        with self._get_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                (key, value)
+            )
+    
+    def get_all_settings(self) -> dict:
+        """Get all settings as a dictionary."""
+        settings = {}
+        for key in self.SETTINGS_DEFAULTS:
+            value = self.get_setting(key)
+            settings[key] = value if value is not None else self.SETTINGS_DEFAULTS[key]
+        return settings
     
     # -------------------------------------------------------------------------
     # Processed Files

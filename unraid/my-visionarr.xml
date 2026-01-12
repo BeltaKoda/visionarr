@@ -20,6 +20,10 @@
     FIRST RUN: Auto-processing is disabled until you complete initial setup.
     Run: docker exec -it visionarr menu
     Or in Unraid: Click the container icon and select Console, then type: menu
+    
+    TIPS:
+    - View Processed Files to see conversion history and backup status.
+    - Use the 'cleanup' option in the processed files list to bulk remove originals.
   </Overview>
   <Category>MediaApp:Video</Category>
   <Icon>https://raw.githubusercontent.com/BeltaKoda/visionarr/main/assets/icon.png</Icon>

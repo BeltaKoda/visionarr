@@ -30,6 +30,18 @@ __version__ = "1.0.0"
 logger = logging.getLogger("visionarr")
 
 
+def _getch() -> str:
+    """Read a single keypress without requiring Enter (Unix/Linux only)."""
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(sys.stdin.fileno())
+        ch = sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    return ch
+
+
 def setup_logging(config: Config) -> None:
     """Configure logging based on config."""
     log_format = "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
@@ -155,7 +167,8 @@ class Visionarr:
         self.running = True
         
         # Check for first-run protection - idle until setup complete
-        if not self.state.is_initial_setup_complete:
+        auto_mode = self.state.get_setting("auto_process_mode") or "off"
+        if auto_mode == "off":
             logger.warning("=" * 60)
             logger.warning("AUTO-PROCESSING DISABLED")
             logger.warning("=" * 60)
@@ -163,21 +176,23 @@ class Visionarr:
             logger.warning("To enable automatic processing:")
             logger.warning("  Run: docker exec -it visionarr menu")
             logger.warning("")
-            logger.warning("In the menu:")
-            logger.warning("  1. Do a Quick Scan to verify detection works")
-            logger.warning("  2. Enable Auto-Processing")
+            logger.warning("In the menu, go to Settings and set:")
+            logger.warning("  Auto Processing Mode: ALL, MOVIES, or SHOWS")
             logger.warning("")
-            logger.warning("Waiting for initial setup...")
+            logger.warning("Waiting for auto-processing to be enabled...")
             logger.warning("=" * 60)
             
             # Idle loop - wait for setup to be completed via menu
-            while self.running and not self.state.is_initial_setup_complete:
+            while self.running:
+                auto_mode = self.state.get_setting("auto_process_mode") or "off"
+                if auto_mode != "off":
+                    break
                 time.sleep(30)  # Check every 30 seconds
             
             if not self.running:
                 return  # Container stopped while waiting
             
-            logger.info("Initial setup detected! Starting auto-processing...")
+            logger.info(f"Auto-processing enabled! Mode: {auto_mode.upper()}")
         
         # Cleanup any orphaned files
         cleaned = self.processor.cleanup_orphaned_files()
@@ -301,15 +316,22 @@ class Visionarr:
                 logger.warning(f"Error analyzing {mkv_file.name}: {e}")
     
     def _find_all_mkvs(self) -> List[Path]:
-        """Find all MKV files in media directories."""
+        """Find all MKV files in media directories based on auto_process_mode."""
+        auto_mode = self.state.get_setting("auto_process_mode") or "off"
         movies_dir = Path("/movies")
         tv_dir = Path("/tv")
         
         files = []
-        if movies_dir.exists():
-            files.extend(movies_dir.rglob("*.mkv"))
-        if tv_dir.exists():
-            files.extend(tv_dir.rglob("*.mkv"))
+        
+        # Scan based on mode
+        if auto_mode in ("all", "movies"):
+            if movies_dir.exists():
+                files.extend(movies_dir.rglob("*.mkv"))
+        
+        if auto_mode in ("all", "shows"):
+            if tv_dir.exists():
+                files.extend(tv_dir.rglob("*.mkv"))
+        
         return files
     
     def _queue_pending_discoveries(self) -> None:
@@ -355,19 +377,19 @@ class Visionarr:
         self.queue.start()
         
         while True:
-            setup_complete = self.state.is_initial_setup_complete
+            # Get auto-processing status from database
+            auto_mode = self.state.get_setting("auto_process_mode") or "off"
             
             print("\n" + "=" * 50)
             print("         VISIONARR MANUAL MODE          ")
             print("=" * 50)
             
-            if not setup_complete:
+            if auto_mode == "off":
                 print("⚠️  AUTO-PROCESSING: OFF")
-                print("   Enable to run scans automatically in daemon mode.")
-                print("-" * 50)
+                print("   Go to Settings to enable.")
             else:
-                print("✅ AUTO-PROCESSING: ON")
-                print("-" * 50)
+                print(f"✅ AUTO-PROCESSING: {auto_mode.upper()}")
+            print("-" * 50)
             
             print("  1. 🔍 Quick Scan (limited files) ⭐ Good for first run")
             print("  2. 📚 Scan Entire Library")
@@ -378,13 +400,6 @@ class Visionarr:
             print("  7. ⚙️  Settings")
             print("  8. 🗄️  Database Management")
             print("  9. 🚪 Exit")
-            print("-" * 50)
-            
-            if setup_complete:
-                print("  0. 🔴 Disable Auto-Processing")
-            else:
-                print("  0. 🟢 Enable Auto-Processing")
-            
             print("=" * 50)
             
             choice = input("\nSelect option: ").strip()
@@ -408,8 +423,6 @@ class Visionarr:
             elif choice == "9":
                 print("\nGoodbye!")
                 break
-            elif choice == "0":
-                self._toggle_auto_mode(setup_complete)
             else:
                 print("\nInvalid option")
 
@@ -871,68 +884,115 @@ class Visionarr:
         input("\nPress Enter to continue...")
     
     def _manual_settings(self) -> None:
-        """Settings submenu to adjust scan frequencies."""
+        """Settings submenu with persistent database-backed settings."""
         while True:
-            # Show backup status with warning
-            backup_status = "ON ⚠️  (doubles storage)" if self.config.backup_enabled else "OFF"
+            # Get current settings from database
+            settings = self.state.get_all_settings()
+            auto_mode = settings.get("auto_process_mode", "off").upper()
+            backup_enabled = settings.get("backup_enabled", "true") == "true"
+            backup_status = "ON ⚠️" if backup_enabled else "OFF"
+            delta_interval = settings.get("delta_scan_interval", "30")
+            full_day = settings.get("full_scan_day", "sunday").capitalize()
+            full_time = settings.get("full_scan_time", "03:00")
             
             print("\n" + "=" * 50)
             print("           SETTINGS           ")
             print("=" * 50)
-            print(f"  1. Delta Scan Interval: {self.config.delta_scan_interval_minutes} min")
-            print(f"  2. Full Scan Day: {self.config.full_scan_day.capitalize()}")
-            print(f"  3. Full Scan Time: {self.config.full_scan_time}")
-            print(f"  4. Backup Originals: {backup_status}")
-            print("  5. ← Back")
+            print(f"  1. Auto Processing Mode [{auto_mode}]")
+            print(f"  2. Backup Originals: {backup_status}")
+            print(f"  3. Delta Scan Interval: {delta_interval} min")
+            print(f"  4. Full Scan Day: {full_day}")
+            print(f"  5. Full Scan Time: {full_time}")
+            print("  6. ← Back")
             print("=" * 50)
-            print("\nNote: Changes here apply to this session only.")
-            print("For permanent changes, edit environment variables.")
+            print("\nPress a number to select:")
             
-            choice = input("\nSelect option: ").strip()
+            choice = _getch()
+            print(choice)  # Echo the keypress
             
             if choice == "1":
+                self._change_auto_process_mode()
+            elif choice == "2":
+                self._toggle_backup_setting()
+            elif choice == "3":
                 try:
                     val = input("Enter delta scan interval (minutes): ").strip()
                     minutes = int(val)
                     if 1 <= minutes <= 1440:
-                        self.config.delta_scan_interval_minutes = minutes
+                        self.state.set_setting("delta_scan_interval", str(minutes))
                         print(f"✅ Delta scan interval set to {minutes} minutes")
                     else:
                         print("Must be between 1 and 1440 minutes")
                 except ValueError:
                     print("Invalid number")
-            elif choice == "2":
+            elif choice == "4":
                 days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
                 print("Days: " + ", ".join(days))
                 day = input("Enter day of week: ").strip().lower()
                 if day in days:
-                    self.config.full_scan_day = day
+                    self.state.set_setting("full_scan_day", day)
                     print(f"✅ Full scan day set to {day.capitalize()}")
                 else:
                     print("Invalid day")
-            elif choice == "3":
+            elif choice == "5":
                 time_str = input("Enter time (HH:MM, 24h format): ").strip()
                 try:
                     hour, minute = map(int, time_str.split(":"))
                     if 0 <= hour <= 23 and 0 <= minute <= 59:
-                        self.config.full_scan_time = time_str
+                        self.state.set_setting("full_scan_time", time_str)
                         print(f"✅ Full scan time set to {time_str}")
                     else:
                         print("Invalid time range")
                 except ValueError:
                     print("Invalid format. Use HH:MM")
-            elif choice == "4":
-                self._toggle_backup_setting()
-            elif choice == "5":
+            elif choice == "6":
                 break
+    
+    def _change_auto_process_mode(self) -> None:
+        """Submenu to change auto processing mode."""
+        current_mode = self.state.get_setting("auto_process_mode") or "off"
+        
+        print("\n" + "=" * 50)
+        print("     AUTO PROCESSING MODE     ")
+        print("=" * 50)
+        print(f"  Current: {current_mode.upper()}")
+        print("")
+        print("  1. OFF    - Disable auto-processing")
+        print("  2. ALL    - Process movies AND shows")
+        print("  3. MOVIES - Process only /movies")
+        print("  4. SHOWS  - Process only /tv")
+        print("  5. ← Back (no change)")
+        print("=" * 50)
+        print("\nPress a number to select:")
+        
+        choice = _getch()
+        print(choice)  # Echo the keypress
+        
+        mode_map = {
+            "1": "off",
+            "2": "all",
+            "3": "movies",
+            "4": "shows"
+        }
+        
+        if choice in mode_map:
+            new_mode = mode_map[choice]
+            self.state.set_setting("auto_process_mode", new_mode)
+            print(f"\n✅ Auto processing mode set to: {new_mode.upper()}")
+            input("\nPress Enter to continue...")
+        elif choice == "5":
+            return  # Back, no change
 
     def _toggle_backup_setting(self) -> None:
         """Toggle backup of original files with storage warning."""
+        current = self.state.get_setting("backup_enabled") or "true"
+        backup_enabled = current == "true"
+        
         print("\n" + "=" * 50)
         print("BACKUP ORIGINAL FILES")
         print("=" * 50)
         
-        if self.config.backup_enabled:
+        if backup_enabled:
             print("Currently: ENABLED")
             print("")
             print("When enabled, original files are renamed to .mkv.original")
@@ -942,7 +1002,7 @@ class Visionarr:
             print("")
             confirm = input("Disable backups? (y/n): ").strip().lower()
             if confirm == "y":
-                self.config.backup_enabled = False
+                self.state.set_setting("backup_enabled", "false")
                 self.processor.backup_enabled = False
                 print("\n🔴 Backups DISABLED - originals will be deleted after conversion")
         else:
@@ -957,7 +1017,7 @@ class Visionarr:
             print("")
             confirm = input("Enable backups? (y/n): ").strip().lower()
             if confirm == "y":
-                self.config.backup_enabled = True
+                self.state.set_setting("backup_enabled", "true")
                 self.processor.backup_enabled = True
                 print("\n🟢 Backups ENABLED - originals kept as .mkv.original")
         

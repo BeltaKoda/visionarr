@@ -401,8 +401,10 @@ class Visionarr:
             print("  8. 🗄️  Database Management")
             print("  9. 🚪 Exit")
             print("=" * 50)
+            print("\nPress a number to select:")
             
-            choice = input("\nSelect option: ").strip()
+            choice = _getch()
+            print(choice)  # Echo the keypress
             
             if choice == "1":
                 self._manual_test_scan()

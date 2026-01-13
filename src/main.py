@@ -900,7 +900,7 @@ class Visionarr:
             print("\n" + "=" * 50)
             print("           SETTINGS           ")
             print("=" * 50)
-            print(f"  1. Auto Processing Mode [{auto_mode}]")
+            print(f"  1. Change Auto Processing Mode [Currently: {auto_mode}]")
             print(f"  2. Backup Originals: {backup_status}")
             print(f"  3. Delta Scan Interval: {delta_interval} min")
             print(f"  4. Full Scan Day: {full_day}")

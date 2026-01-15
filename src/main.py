@@ -682,64 +682,111 @@ class Visionarr:
             input("\nPress Enter to continue...")
             return
         
-        print(f"\nFound {len(discovered)} Profile 7 file(s) from previous scans")
-        print("-" * 55)
-        
-        # Pagination setup (5 files per page)
-        selected = set()
-        page_size = 5
-        total_pages = (len(discovered) + page_size - 1) // page_size
-        current_page = 0
+        # Create index mapping for selection (maintains selection across filters)
+        # Key: original index in discovered list, Value: the discovered item
+        selected_indices = set()  # Stores indices from original discovered list
+        search_term = ""
         
         while True:
-            # Display current page
-            print(f"\nPage {current_page + 1}/{total_pages}:")
-            start_idx = current_page * page_size
-            end_idx = min(start_idx + page_size, len(discovered))
-            
-            for i in range(start_idx, end_idx):
-                item = discovered[i]
-                mark = "[x]" if i in selected else "[ ]"
-                # Truncate title for display
-                title = item['title'][:45] + "..." if len(item['title']) > 45 else item['title']
-                print(f"  {mark} {i+1}. {title}")
+            # Apply filter
+            if search_term:
+                # filtered contains (original_index, item) tuples
+                filtered = [(i, d) for i, d in enumerate(discovered) 
+                           if search_term.lower() in d['title'].lower() or search_term.lower() in d['file_path'].lower()]
+                print(f"\n🔍 Filter: '{search_term}' ({len(filtered)} matches)")
+            else:
+                filtered = [(i, d) for i, d in enumerate(discovered)]
+                print(f"\nFound {len(discovered)} Profile 7 file(s) from previous scans")
             
             print("-" * 55)
-            print(f"Selected: {len(selected)} file(s)")
-            print("Enter numbers to toggle (e.g. '1 3'), n=next, p=prev, d=done, q=cancel")
             
-            cmd = input("> ").strip().lower()
+            if not filtered:
+                print("No files match your search.")
+                print(f"Selected: {len(selected_indices)} file(s) total")
+                print("-" * 55)
+                print("s=search, c=clear filter, d=done (convert selected), q=cancel")
+                cmd = input("> ").strip().lower()
+                if cmd == "s":
+                    search_term = input("Search for: ").strip()
+                elif cmd == "c":
+                    search_term = ""
+                elif cmd == "d":
+                    if not selected_indices:
+                        print("⚠️  No files selected.")
+                        continue
+                    break
+                elif cmd == "q":
+                    return
+                continue
             
-            if cmd == "n":
-                if current_page < total_pages - 1:
-                    current_page += 1
-            elif cmd == "p":
-                if current_page > 0:
-                    current_page -= 1
-            elif cmd == "d":
-                if not selected:
-                    print("⚠️  No files selected. Select some files or press 'q' to cancel.")
-                    continue
+            # Pagination setup (5 files per page)
+            page_size = 5
+            total_pages = (len(filtered) + page_size - 1) // page_size
+            current_page = 0
+            
+            while True:
+                # Display current page
+                print(f"\nPage {current_page + 1}/{total_pages}:")
+                start_idx = current_page * page_size
+                end_idx = min(start_idx + page_size, len(filtered))
+                
+                for display_num, (orig_idx, item) in enumerate(filtered[start_idx:end_idx], start=start_idx + 1):
+                    mark = "[x]" if orig_idx in selected_indices else "[ ]"
+                    title = item['title'][:42] + "..." if len(item['title']) > 42 else item['title']
+                    print(f"  {mark} {display_num}. {title}")
+                
+                print("-" * 55)
+                print(f"Selected: {len(selected_indices)} file(s)")
+                filter_hint = f" | filter:'{search_term}'" if search_term else ""
+                print(f"[1-{len(filtered)}]=toggle, n/p=page, s=search, c=clear, d=done, q=quit{filter_hint}")
+                
+                cmd = input("> ").strip().lower()
+                
+                if cmd == "n":
+                    if current_page < total_pages - 1:
+                        current_page += 1
+                elif cmd == "p":
+                    if current_page > 0:
+                        current_page -= 1
+                elif cmd == "s":
+                    search_term = input("Search for: ").strip()
+                    break  # Re-filter
+                elif cmd == "c":
+                    search_term = ""
+                    break  # Clear filter
+                elif cmd == "d":
+                    if not selected_indices:
+                        print("⚠️  No files selected. Select some files or press 'q' to cancel.")
+                        continue
+                    break
+                elif cmd == "q":
+                    return
+                elif cmd == "a":
+                    # Select all in current filter
+                    for orig_idx, _ in filtered:
+                        selected_indices.add(orig_idx)
+                else:
+                    # Handle number selection (using display numbers from filtered list)
+                    try:
+                        parts = cmd.replace(",", " ").split()
+                        for part in parts:
+                            display_idx = int(part) - 1
+                            if 0 <= display_idx < len(filtered):
+                                orig_idx = filtered[display_idx][0]
+                                if orig_idx in selected_indices:
+                                    selected_indices.remove(orig_idx)
+                                else:
+                                    selected_indices.add(orig_idx)
+                    except ValueError:
+                        print("Invalid input.")
+            
+            # Check if we should exit the outer loop (done was pressed)
+            if cmd == "d" and selected_indices:
                 break
-            elif cmd == "q":
-                return
-            else:
-                # Handle space-separated numbers like "1 3" or "1,3" or single number
-                try:
-                    parts = cmd.replace(",", " ").split()
-                    for part in parts:
-                        idx = int(part) - 1
-                        if 0 <= idx < len(discovered):
-                            if idx in selected:
-                                selected.remove(idx)
-                            else:
-                                selected.add(idx)
-                except ValueError:
-                    print("Invalid input. Enter numbers, 'n', 'p', 'd', or 'q'.")
         
         # Queue selected files
-        print(f"\nQueuing {len(selected)} file(s) for conversion...")
-        for idx in selected:
+        print(f"\nQueuing {len(selected_indices)} file(s) for conversion...")
+        for idx in selected_indices:
             item = discovered[idx]
             file_path = Path(item['file_path'])
             self.queue.add_job(
@@ -747,16 +794,15 @@ class Visionarr:
                 media_id=0,
                 title=item['title']
             )
-            # Note: File is removed from discovered_files in _on_job_complete
-            # to handle container restarts gracefully
         
-        print(f"✅ {len(selected)} file(s) added to queue")
+        print(f"✅ {len(selected_indices)} file(s) added to queue")
         print("\n  m = Return to menu")
         print("  s = View live status")
         
         choice = input("\nSelect option: ").strip().lower()
         if choice == "s":
             self._manual_view_status_live()
+
 
     def _manual_view_status_live(self) -> None:
         """Live view of queue and processing status."""

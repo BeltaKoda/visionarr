@@ -465,6 +465,22 @@ class Visionarr:
         
         input("\nPress Enter to continue...")
 
+    def _manual_test_scan(self) -> None:
+        """Quick scan with user-defined limit."""
+        print("\n" + "=" * 50)
+        print("QUICK SCAN")
+        print("=" * 50)
+        print("Scan a limited number of files - great for first run")
+        print("to verify detection works before scanning entire library.")
+        
+        try:
+            limit = int(input("\nHow many files to scan? (e.g., 50): ").strip())
+        except ValueError:
+            print("Invalid number.")
+            return
+
+        self._scan_library_impl(limit=limit, only_new=False)
+
     def _manual_delta_scan(self) -> None:
         """Fast scan for new files not in DB."""
         print("\n" + "=" * 50)
@@ -509,7 +525,20 @@ class Visionarr:
             print("❌ No media directories found (/movies, /tv)")
             return []
         
+        # OPTIMIZATION: Batch load known paths into memory for O(1) lookups
+        known_paths: set = set()
+        if only_new:
+            print("   Loading known files from database...")
+            # Get all processed file paths
+            for pf in self.state.get_processed_files(limit=100000):
+                known_paths.add(pf.file_path)
+            # Get all discovered file paths
+            for df in self.state.get_discovered():
+                known_paths.add(df['file_path'])
+            print(f"   Loaded {len(known_paths)} known files (will skip these)")
+        
         total_files = 0
+        skipped_files = 0
         profile7_files = []
         errors = []
         stopped = False
@@ -523,25 +552,27 @@ class Visionarr:
                     
                 print(f"📂 Scanning {name}: {directory}")
                 
-                # Find all MKV files
-                # Note: rglob can be slow for massive libraries, but fine for now
-                mkv_files = list(directory.rglob("*.mkv"))
-                print(f"   Found {len(mkv_files)} MKV files")
-                
-                for i, mkv_file in enumerate(mkv_files, 1):
+                # OPTIMIZATION: Use generator directly instead of list() for immediate start
+                for mkv_file in directory.rglob("*.mkv"):
                     if limit and total_files >= limit:
                         print(f"\n   Reached limit of {limit} files")
                         stopped = True
                         break
                     
                     total_files += 1
-                    # Progress indication
-                    print(f"   [{total_files} scanned | {len(profile7_files)} Profile 7] {mkv_file.name[:45]}...", end="\r")
                     
+                    # OPTIMIZATION: Check against in-memory set instead of DB queries
                     if only_new:
-                        # Skip if already processed or discovered
-                        if self.state.is_processed(str(mkv_file)) or self.state.is_discovered(str(mkv_file)):
+                        file_path_str = str(mkv_file)
+                        if file_path_str in known_paths:
+                            skipped_files += 1
+                            # OPTIMIZATION: Throttle console output (every 100 skipped files)
+                            if skipped_files % 100 == 0:
+                                print(f"   [{total_files} checked | {skipped_files} skipped | {len(profile7_files)} P7]", end="\r")
                             continue
+                    
+                    # Progress indication for files being analyzed
+                    print(f"   [{total_files} scanned | {len(profile7_files)} Profile 7] {mkv_file.name[:45]}...", end="\r")
 
                     try:
                         analysis = self.processor.analyze_file(mkv_file)
@@ -563,8 +594,10 @@ class Visionarr:
         print("\n" + "=" * 50)
         print("SCAN RESULTS")
         print("=" * 50)
-        print(f"Total files scanned: {total_files}")
-        print(f"Profile 7: {len(profile7_files)}")
+        print(f"Total files checked: {total_files}")
+        if only_new:
+            print(f"Skipped (already known): {skipped_files}")
+        print(f"Profile 7 found: {len(profile7_files)}")
         print(f"Errors: {len(errors)}")
         
         # Log to Docker logs
@@ -586,6 +619,7 @@ class Visionarr:
         if limit is None:
             input("\nPress Enter to continue...")
         return profile7_files
+
 
     def _manual_select_convert(self) -> None:
         """Select files to convert from previously discovered Profile 7 files."""

@@ -80,6 +80,11 @@ RUN mkdir -p /home/visionarr /etc/skel && \
     echo 'echo "  Type: menu   - Launch interactive menu"' >> /tmp/bashrc && \
     echo 'echo ""' >> /tmp/bashrc && \
     echo 'alias menu="python -m src.main --manual"' >> /tmp/bashrc && \
+    echo '' >> /tmp/bashrc && \
+    echo '# Auto-start menu if in an interactive shell' >> /tmp/bashrc && \
+    echo 'if [[ $- == *i* ]]; then' >> /tmp/bashrc && \
+    echo '    menu' >> /tmp/bashrc && \
+    echo 'fi' >> /tmp/bashrc && \
     cp /tmp/bashrc /root/.bashrc && \
     cp /tmp/bashrc /home/visionarr/.bashrc && \
     cp /tmp/bashrc /etc/skel/.bashrc && \

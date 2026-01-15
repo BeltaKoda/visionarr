@@ -392,38 +392,43 @@ class Visionarr:
             print("-" * 50)
             
             print("  1. 🔍 Quick Scan (limited files) ⭐ Good for first run")
-            print("  2. 📚 Scan Entire Library")
-            print("  3. 📝 Manual Conversion (Select & Convert)")
-            print("  4. 📋 View Discovered Files")
-            print("  5. ✅ View Processed Files")
-            print("  6. 📊 View Status (Live)")
-            print("  7. ⚙️  Settings")
-            print("  8. 🗄️  Database Management")
-            print("  9. 🚪 Exit")
+            print("  2. ⏱️  Delta Scan (New files only)")
+            print("  3. 📚 Scan Entire Library")
+            print("  4. 📝 Manual Conversion (Select & Convert)")
+            print("  5. 📋 View Discovered Files")
+            print("  6. ✅ View Processed Files")
+            print("  7. 📊 View Status (Live)")
+            print("  8. ⚙️  Settings")
+            print("  9. 🗄️  Database Management")
+            print("  0. 🚪 Exit (Return to Shell)")
             print("=" * 50)
             print("\nPress a number to select:")
             
             choice = _getch()
-            print(choice)  # Echo the keypress
+            if choice == "0": choice = "10" # Map 0 to 10 for easier logic
+            print(choice if choice != "10" else "0")  # Echo the keypress
             
             if choice == "1":
                 self._manual_test_scan()
             elif choice == "2":
-                self._manual_scan_library()
+                self._manual_delta_scan()
             elif choice == "3":
-                self._manual_select_convert()
+                self._manual_scan_library()
             elif choice == "4":
-                self._manual_view_db()
+                self._manual_select_convert()
             elif choice == "5":
-                self._manual_view_processed()
+                self._manual_view_db()
             elif choice == "6":
-                self._manual_view_status_live()
+                self._manual_view_processed()
             elif choice == "7":
-                self._manual_settings()
+                self._manual_view_status_live()
             elif choice == "8":
-                self._manual_db_management()
+                self._manual_settings()
             elif choice == "9":
-                print("\nGoodbye!")
+                self._manual_db_management()
+            elif choice == "10":
+                print("\nReturning to shell. Type 'menu' to return to this screen.")
+                print("Goodbye!")
                 break
             else:
                 print("\nInvalid option")
@@ -460,28 +465,22 @@ class Visionarr:
         
         input("\nPress Enter to continue...")
 
-    def _manual_test_scan(self) -> None:
-        """Quick scan with user-defined limit."""
+    def _manual_delta_scan(self) -> None:
+        """Fast scan for new files not in DB."""
         print("\n" + "=" * 50)
-        print("QUICK SCAN")
+        print("DELTA SCAN (NEW FILES ONLY)")
         print("=" * 50)
-        print("Scan a limited number of files - great for first run")
-        print("to verify detection works before scanning entire library.")
+        print("Scanning for new Profile 7 files not yet in the database.")
+        print("This is usually much faster than a full scan.")
         
-        try:
-            limit = int(input("\nHow many files to scan? (e.g., 50): ").strip())
-        except ValueError:
-            print("Invalid number.")
-            return
-
-        self._scan_library_impl(limit=limit)
+        self._scan_library_impl(limit=None, skip_confirmation=True, only_new=True)
 
     def _manual_scan_library(self) -> None:
         """Scan entire library."""
         # Don't skip confirmation here - user explicitly chose "Scan Entire Library"
-        self._scan_library_impl(limit=None, skip_confirmation=False)
+        self._scan_library_impl(limit=None, skip_confirmation=False, only_new=False)
 
-    def _scan_library_impl(self, limit: Optional[int] = None, skip_confirmation: bool = False) -> List[Path]:
+    def _scan_library_impl(self, limit: Optional[int] = None, skip_confirmation: bool = False, only_new: bool = False) -> List[Path]:
         """Implementation of library scan."""
         # Only ask for confirmation if it's a full scan and we're not skipping
         if limit is None and not skip_confirmation:
@@ -490,7 +489,10 @@ class Visionarr:
                 return []
         
         print("\n" + "=" * 50)
-        print(f"{'TEST' if limit else 'FULL'} LIBRARY SCAN")
+        if only_new:
+            print("DELTA SCAN (NEW FILES)")
+        else:
+            print(f"{'TEST' if limit else 'FULL'} LIBRARY SCAN")
         print("=" * 50)
         
         # Get directories to scan
@@ -536,6 +538,11 @@ class Visionarr:
                     # Progress indication
                     print(f"   [{total_files} scanned | {len(profile7_files)} Profile 7] {mkv_file.name[:45]}...", end="\r")
                     
+                    if only_new:
+                        # Skip if already processed or discovered
+                        if self.state.is_processed(str(mkv_file)) or self.state.is_discovered(str(mkv_file)):
+                            continue
+
                     try:
                         analysis = self.processor.analyze_file(mkv_file)
                         if analysis.needs_conversion:

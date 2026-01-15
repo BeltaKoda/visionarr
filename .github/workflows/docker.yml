@@ -5,6 +5,7 @@ on:
     branches:
       - master
       - main
+      - feature/*
     paths-ignore:
       - '*.md'
       - 'docs/**'
@@ -51,6 +52,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=dev,enable=${{ startsWith(github.ref, 'refs/heads/feature/') }}
             type=sha,prefix=
             type=ref,event=branch
             type=ref,event=pr

@@ -42,6 +42,15 @@ def _getch() -> str:
     return ch
 
 
+def _confirm(prompt: str) -> bool:
+    """Single-keypress y/n confirmation. Returns True if 'y' pressed."""
+    print(prompt, end=" ", flush=True)
+    ch = _getch().lower()
+    print(ch)  # Echo the keypress
+    return ch == "y"
+
+
+
 def setup_logging(config: Config) -> None:
     """Configure logging based on config."""
     log_format = "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
@@ -470,8 +479,7 @@ class Visionarr:
             print("This will stop the daemon from automatically scanning")
             print("and converting files. Manual conversion will still work.")
             print("")
-            confirm = input("Disable auto-processing? (y/n): ").strip().lower()
-            if confirm == "y":
+            if _confirm("Disable auto-processing? (y/n):"):
                 self.state.reset_initial_setup()
                 print("\n🔴 Auto-processing DISABLED")
                 print("   Daemon will not auto-scan until re-enabled.")
@@ -484,8 +492,7 @@ class Visionarr:
             print("⚠️  Make sure you've done a Quick Scan first to verify")
             print("   detection works correctly on your library!")
             print("")
-            confirm = input("Enable auto-processing? (y/n): ").strip().lower()
-            if confirm == "y":
+            if _confirm("Enable auto-processing? (y/n):"):
                 self.state.mark_initial_setup_complete()
                 print("\n🟢 Auto-processing ENABLED")
                 print("   Daemon will now auto-scan based on schedule settings.")
@@ -527,9 +534,9 @@ class Visionarr:
         """Implementation of library scan."""
         # Only ask for confirmation if it's a full scan and we're not skipping
         if limit is None and not skip_confirmation:
-            confirm = input("\n⚠️  This will scan ALL files. Continue? (y/n): ").strip().lower()
-            if confirm != "y":
+            if not _confirm("\n⚠️  This will scan ALL files. Continue? (y/n):"):
                 return []
+
         
         print("\n" + "=" * 50)
         if only_new:
@@ -942,10 +949,10 @@ class Visionarr:
         print("\n⚠️  WARNING: This will permanently delete original files.")
         print("   Make sure your converted files are working correctly!")
         
-        confirm = input("\nDelete all original backups? (y/n): ").strip().lower()
-        if confirm != "y":
+        if not _confirm("\nDelete all original backups? (y/n):"):
             print("Cleanup cancelled.")
             return
+
             
         print("\nDeleting backups...")
         deleted_count = 0
@@ -1079,8 +1086,7 @@ class Visionarr:
             print("")
             print("Disabling this will DELETE original files after conversion.")
             print("")
-            confirm = input("Disable backups? (y/n): ").strip().lower()
-            if confirm == "y":
+            if _confirm("Disable backups? (y/n):"):
                 self.state.set_setting("backup_enabled", "false")
                 self.processor.backup_enabled = False
                 print("\n🔴 Backups DISABLED - originals will be deleted after conversion")
@@ -1094,8 +1100,7 @@ class Visionarr:
             print("This is recommended for safety but may not be practical for")
             print("large libraries with limited storage.")
             print("")
-            confirm = input("Enable backups? (y/n): ").strip().lower()
-            if confirm == "y":
+            if _confirm("Enable backups? (y/n):"):
                 self.state.set_setting("backup_enabled", "true")
                 self.processor.backup_enabled = True
                 print("\n🟢 Backups ENABLED - originals kept as .mkv.original")
@@ -1127,8 +1132,8 @@ class Visionarr:
                 print("\n⚠️  This will clear the scan cache only.")
                 print("   Next Delta Scan will re-analyze ALL files.")
                 print("   (Processed/converted files are NOT affected)")
-                confirm = input("\nClear scan cache? (y/n): ").strip().lower()
-                if confirm == "y":
+                if _confirm("\nClear scan cache? (y/n):"):
+
                     count = self.state.clear_scanned()
                     print(f"✅ Scan cache cleared ({count} records removed)")
                 else:

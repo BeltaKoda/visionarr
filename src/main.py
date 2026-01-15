@@ -824,38 +824,71 @@ class Visionarr:
             input("\nPress Enter to continue...")
             return
         
-        print(f"\nFound {len(discovered)} Profile 7 file(s) in database")
-        print("-" * 55)
-        
-        # Pagination (5 per page)
-        page_size = 5
-        total_pages = (len(discovered) + page_size - 1) // page_size
-        current_page = 0
+        # Search/filter state
+        search_term = ""
+        filtered = discovered
         
         while True:
-            print(f"\nPage {current_page + 1}/{total_pages}:")
-            start_idx = current_page * page_size
-            end_idx = min(start_idx + page_size, len(discovered))
-            
-            for i in range(start_idx, end_idx):
-                item = discovered[i]
-                title = item['title'][:45] + "..." if len(item['title']) > 45 else item['title']
-                print(f"  {i+1}. {title}")
-                print(f"      {item['file_path'][:60]}...")
+            # Apply filter if search term is set
+            if search_term:
+                filtered = [d for d in discovered if search_term.lower() in d['title'].lower() or search_term.lower() in d['file_path'].lower()]
+                print(f"\n🔍 Filter: '{search_term}' ({len(filtered)} matches)")
+            else:
+                filtered = discovered
+                print(f"\nFound {len(filtered)} Profile 7 file(s) in database")
             
             print("-" * 55)
-            print("n=next, p=prev, q=quit")
             
-            cmd = input("> ").strip().lower()
+            if not filtered:
+                print("No files match your search.")
+                print("-" * 55)
+                print("s=search, c=clear filter, q=quit")
+                cmd = input("> ").strip().lower()
+                if cmd == "s":
+                    search_term = input("Search for: ").strip()
+                elif cmd == "c":
+                    search_term = ""
+                elif cmd == "q":
+                    return
+                continue
             
-            if cmd == "n":
-                if current_page < total_pages - 1:
-                    current_page += 1
-            elif cmd == "p":
-                if current_page > 0:
-                    current_page -= 1
-            elif cmd == "q":
-                return
+            # Pagination (5 per page)
+            page_size = 5
+            total_pages = (len(filtered) + page_size - 1) // page_size
+            current_page = 0
+            
+            while True:
+                print(f"\nPage {current_page + 1}/{total_pages}:")
+                start_idx = current_page * page_size
+                end_idx = min(start_idx + page_size, len(filtered))
+                
+                for i in range(start_idx, end_idx):
+                    item = filtered[i]
+                    title = item['title'][:45] + "..." if len(item['title']) > 45 else item['title']
+                    print(f"  {i+1}. {title}")
+                    print(f"      {item['file_path'][:60]}...")
+                
+                print("-" * 55)
+                filter_hint = f" | filter:'{search_term}'" if search_term else ""
+                print(f"n=next, p=prev, s=search, c=clear, q=quit{filter_hint}")
+                
+                cmd = input("> ").strip().lower()
+                
+                if cmd == "n":
+                    if current_page < total_pages - 1:
+                        current_page += 1
+                elif cmd == "p":
+                    if current_page > 0:
+                        current_page -= 1
+                elif cmd == "s":
+                    search_term = input("Search for: ").strip()
+                    break  # Re-filter and restart pagination
+                elif cmd == "c":
+                    search_term = ""
+                    break  # Clear filter and restart
+                elif cmd == "q":
+                    return
+
 
     def _manual_view_processed(self) -> None:
         """View successfully converted files in database with pagination."""

@@ -277,21 +277,35 @@ class Visionarr:
         return self.last_full_scan_date != today
     
     def _run_daemon_delta_scan(self) -> None:
-        """Run a delta scan - skip already processed/discovered files."""
+        """Run a delta scan - skip already scanned files."""
+        # Batch load all scanned paths for O(1) lookups
+        scanned_paths = self.state.get_all_scanned_paths()
+        logger.info(f"Delta scan: {len(scanned_paths)} files in scan cache")
+        
         for mkv_file in self._find_all_mkvs():
             if not self.running:
                 break
             
             file_path_str = str(mkv_file)
             
-            # Skip if already processed or discovered
-            if self.state.is_processed(file_path_str):
-                continue
-            if self.state.is_discovered(file_path_str):
+            # Skip if already scanned (any profile)
+            if file_path_str in scanned_paths:
                 continue
             
             try:
                 analysis = self.processor.analyze_file(mkv_file)
+                
+                # Record scan result for ALL files
+                profile_str = None
+                if analysis.dovi_profile:
+                    profile_str = str(analysis.dovi_profile.value)
+                self.state.add_scanned(
+                    file_path_str,
+                    analysis.has_dovi,
+                    profile_str,
+                    analysis.file_size_bytes
+                )
+                
                 if analysis.needs_conversion:
                     self.state.add_discovered(file_path_str, mkv_file.stem)
                     logger.info(f"Found Profile 7: {mkv_file.name}")
@@ -308,12 +322,25 @@ class Visionarr:
             
             try:
                 analysis = self.processor.analyze_file(mkv_file)
+                
+                # Record/update scan result for ALL files
+                profile_str = None
+                if analysis.dovi_profile:
+                    profile_str = str(analysis.dovi_profile.value)
+                self.state.add_scanned(
+                    file_path_str,
+                    analysis.has_dovi,
+                    profile_str,
+                    analysis.file_size_bytes
+                )
+                
                 if analysis.needs_conversion:
                     if not self.state.is_discovered(file_path_str) and not self.state.is_processed(file_path_str):
                         self.state.add_discovered(file_path_str, mkv_file.stem)
                         logger.info(f"Found Profile 7: {mkv_file.name}")
             except Exception as e:
                 logger.warning(f"Error analyzing {mkv_file.name}: {e}")
+
     
     def _find_all_mkvs(self) -> List[Path]:
         """Find all MKV files in media directories based on auto_process_mode."""
@@ -525,20 +552,16 @@ class Visionarr:
             print("❌ No media directories found (/movies, /tv)")
             return []
         
-        # OPTIMIZATION: Batch load known paths into memory for O(1) lookups
+        # OPTIMIZATION: Batch load scanned paths into memory for O(1) lookups
         known_paths: set = set()
         if only_new:
-            print("   Loading known files from database...")
-            # Get all processed file paths
-            for pf in self.state.get_processed_files(limit=100000):
-                known_paths.add(pf.file_path)
-            # Get all discovered file paths
-            for df in self.state.get_discovered():
-                known_paths.add(df['file_path'])
-            print(f"   Loaded {len(known_paths)} known files (will skip these)")
+            print("   Loading scan cache from database...")
+            known_paths = self.state.get_all_scanned_paths()
+            print(f"   Loaded {len(known_paths)} previously scanned files (will skip these)")
         
         total_files = 0
         skipped_files = 0
+        analyzed_files = 0
         profile7_files = []
         errors = []
         stopped = False
@@ -560,26 +583,38 @@ class Visionarr:
                         break
                     
                     total_files += 1
+                    file_path_str = str(mkv_file)
                     
                     # OPTIMIZATION: Check against in-memory set instead of DB queries
-                    if only_new:
-                        file_path_str = str(mkv_file)
-                        if file_path_str in known_paths:
-                            skipped_files += 1
-                            # OPTIMIZATION: Throttle console output (every 100 skipped files)
-                            if skipped_files % 100 == 0:
-                                print(f"   [{total_files} checked | {skipped_files} skipped | {len(profile7_files)} P7]", end="\r")
-                            continue
+                    if only_new and file_path_str in known_paths:
+                        skipped_files += 1
+                        # OPTIMIZATION: Throttle console output (every 100 skipped files)
+                        if skipped_files % 100 == 0:
+                            print(f"   [{total_files} checked | {skipped_files} skipped | {len(profile7_files)} P7]", end="\r")
+                        continue
                     
                     # Progress indication for files being analyzed
-                    print(f"   [{total_files} scanned | {len(profile7_files)} Profile 7] {mkv_file.name[:45]}...", end="\r")
+                    analyzed_files += 1
+                    print(f"   [{analyzed_files} analyzed | {len(profile7_files)} Profile 7] {mkv_file.name[:40]}...", end="\r")
 
                     try:
                         analysis = self.processor.analyze_file(mkv_file)
+                        
+                        # Record scan result for ALL files (Profile 7, 8, 5, or no DoVi)
+                        profile_str = None
+                        if analysis.dovi_profile:
+                            profile_str = str(analysis.dovi_profile.value)
+                        self.state.add_scanned(
+                            file_path_str,
+                            analysis.has_dovi,
+                            profile_str,
+                            analysis.file_size_bytes
+                        )
+                        
                         if analysis.needs_conversion:
                             profile7_files.append(mkv_file)
                             # Save to DB for Manual Conversion selection
-                            self.state.add_discovered(str(mkv_file), mkv_file.stem)
+                            self.state.add_discovered(file_path_str, mkv_file.stem)
                             print(f"\n   ✅ PROFILE 7: {mkv_file.name}")
                     except PermissionError:
                         errors.append(f"Permission denied: {mkv_file}")
@@ -587,6 +622,7 @@ class Visionarr:
                         errors.append(f"{mkv_file.name}: {str(e)[:50]}")
                         
                 print() 
+
                 
         except KeyboardInterrupt:
             print("\n\n⚠️  Scan interrupted by user")
@@ -1070,36 +1106,56 @@ class Visionarr:
     def _manual_db_management(self) -> None:
         """Database management submenu."""
         while True:
-            print("\n" + "=" * 44)
+            # Get scan cache stats
+            scan_stats = self.state.get_scanned_stats()
+            
+            print("\n" + "=" * 50)
             print("         DATABASE MANAGEMENT              ")
-            print("=" * 44)
-            print("  1. 🗑️  Clear Database (requires new scans)")
-            print("  2. 📤 Export Database to JSON")
-            print("  3. ← Back")
-            print("=" * 44)
+            print("=" * 50)
+            print(f"   Scan Cache: {scan_stats['total']} files")
+            print(f"   ({scan_stats['profile_7']} P7 | {scan_stats['profile_8']} P8 | {scan_stats['no_dovi']} no DoVi)")
+            print("-" * 50)
+            print("  1. 🔄 Clear Scan Cache (force rescan)")
+            print("  2. 🗑️  Clear Entire Database")
+            print("  3. 📤 Export Database to JSON")
+            print("  4. ← Back")
+            print("=" * 50)
             
             choice = input("\nSelect option: ").strip()
             
             if choice == "1":
+                print("\n⚠️  This will clear the scan cache only.")
+                print("   Next Delta Scan will re-analyze ALL files.")
+                print("   (Processed/converted files are NOT affected)")
+                confirm = input("\nClear scan cache? (y/n): ").strip().lower()
+                if confirm == "y":
+                    count = self.state.clear_scanned()
+                    print(f"✅ Scan cache cleared ({count} records removed)")
+                else:
+                    print("❌ Cancelled")
+            elif choice == "2":
                 print("\n⚠️  This will clear ALL database records:")
                 print("   - All processed file history")
                 print("   - All failed file records")
                 print("   - All discovered Profile 7 files")
+                print("   - All scan cache records")
                 print("   - Initial setup status (auto-mode disabled)")
                 confirm = input("\nType 'clear' to confirm: ").strip().lower()
                 if confirm == "clear":
                     count = self.state.clear_database()
+                    self.state.clear_scanned()
                     print(f"✅ Database cleared ({count} records removed)")
                     print("   You will need to run a scan and complete setup again.")
                 else:
                     print("❌ Cancelled")
-            elif choice == "2":
+            elif choice == "3":
                 json_data = self.state.export_to_json()
                 export_path = self.config.config_dir / "visionarr_export.json"
                 export_path.write_text(json_data)
                 print(f"✅ Exported to {export_path}")
-            elif choice == "3":
+            elif choice == "4":
                 break
+
     
     def _complete_initial_setup(self) -> None:
         """Complete initial setup to enable automatic conversion mode."""

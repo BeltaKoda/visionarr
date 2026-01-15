@@ -72,6 +72,15 @@ class StateDB:
                     discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 
+                CREATE TABLE IF NOT EXISTS scanned_files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_path TEXT UNIQUE NOT NULL,
+                    has_dovi BOOLEAN NOT NULL,
+                    dovi_profile TEXT,
+                    file_size_bytes INTEGER NOT NULL,
+                    scanned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                
                 CREATE TABLE IF NOT EXISTS settings (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -80,7 +89,9 @@ class StateDB:
                 CREATE INDEX IF NOT EXISTS idx_processed_path ON processed_files(file_path);
                 CREATE INDEX IF NOT EXISTS idx_failed_path ON failed_files(file_path);
                 CREATE INDEX IF NOT EXISTS idx_discovered_path ON discovered_files(file_path);
+                CREATE INDEX IF NOT EXISTS idx_scanned_path ON scanned_files(file_path);
             """)
+
     
     @contextmanager
     def _get_connection(self) -> Generator[sqlite3.Connection, None, None]:
@@ -426,3 +437,61 @@ class StateDB:
             count = conn.execute("SELECT COUNT(*) FROM discovered_files").fetchone()[0]
             conn.execute("DELETE FROM discovered_files")
             return count
+
+    # ==================== Scanned Files Methods ====================
+    
+    def add_scanned(self, file_path: str, has_dovi: bool, dovi_profile: Optional[str], file_size_bytes: int) -> bool:
+        """
+        Record a scanned file with its DoVi profile status.
+        Returns True if new record, False if already existed (updated).
+        """
+        with self._get_connection() as conn:
+            try:
+                conn.execute("""
+                    INSERT OR REPLACE INTO scanned_files 
+                    (file_path, has_dovi, dovi_profile, file_size_bytes, scanned_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """, (file_path, has_dovi, dovi_profile, file_size_bytes))
+                return True
+            except Exception:
+                return False
+
+    def is_scanned(self, file_path: str) -> bool:
+        """Check if a file has been previously scanned."""
+        with self._get_connection() as conn:
+            result = conn.execute(
+                "SELECT 1 FROM scanned_files WHERE file_path = ?",
+                (file_path,)
+            ).fetchone()
+            return result is not None
+
+    def get_all_scanned_paths(self) -> set:
+        """
+        Return a set of all scanned file paths for efficient O(1) lookups.
+        Used by Delta Scan to skip previously analyzed files.
+        """
+        with self._get_connection() as conn:
+            rows = conn.execute("SELECT file_path FROM scanned_files").fetchall()
+            return {row[0] for row in rows}
+
+    def clear_scanned(self) -> int:
+        """Clear all scanned file records. Returns count deleted."""
+        with self._get_connection() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM scanned_files").fetchone()[0]
+            conn.execute("DELETE FROM scanned_files")
+            return count
+
+    def get_scanned_stats(self) -> dict:
+        """Get statistics about scanned files."""
+        with self._get_connection() as conn:
+            total = conn.execute("SELECT COUNT(*) FROM scanned_files").fetchone()[0]
+            with_dovi = conn.execute("SELECT COUNT(*) FROM scanned_files WHERE has_dovi = 1").fetchone()[0]
+            profile_7 = conn.execute("SELECT COUNT(*) FROM scanned_files WHERE dovi_profile = '7'").fetchone()[0]
+            profile_8 = conn.execute("SELECT COUNT(*) FROM scanned_files WHERE dovi_profile = '8'").fetchone()[0]
+            return {
+                "total": total,
+                "with_dovi": with_dovi,
+                "profile_7": profile_7,
+                "profile_8": profile_8,
+                "no_dovi": total - with_dovi
+            }

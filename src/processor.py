@@ -106,6 +106,35 @@ class Processor:
         except Exception as e:
             raise ProcessorError(f"{description} error: {e}")
     
+    def _preallocate_file(self, file_path: Path, size_bytes: int) -> None:
+        """
+        Pre-allocate a file to reserve disk space (thick provisioning).
+        This prevents issues on Unraid where thin-provisioned files can outgrow
+        the cache drive mid-write.
+        """
+        size_gb = size_bytes / (1024**3)
+        logger.debug(f"Pre-allocating {size_gb:.2f} GB for {file_path.name}")
+        
+        try:
+            subprocess.run(
+                ["fallocate", "-l", str(size_bytes), str(file_path)],
+                check=True, capture_output=True, text=True
+            )
+            logger.debug(f"Pre-allocation successful: {file_path.name}")
+        except subprocess.CalledProcessError as e:
+            # Fallback: truncate (may use sparse file on some filesystems)
+            logger.warning(f"fallocate failed ({e}), using truncate fallback")
+            try:
+                with open(file_path, 'wb') as f:
+                    f.truncate(size_bytes)
+            except Exception as fallback_error:
+                logger.warning(f"Truncate fallback also failed: {fallback_error}")
+                # Continue anyway - dovi_tool will create the file
+        except FileNotFoundError:
+            # fallocate not available on this system
+            logger.debug("fallocate not available, skipping pre-allocation")
+
+    
     # -------------------------------------------------------------------------
     # Detection
     # -------------------------------------------------------------------------
@@ -310,6 +339,12 @@ class Processor:
             # Step 2: Convert Profile 7 to Profile 8 (single command handles everything)
             # --mode 2 converts to Profile 8.1, --discard removes enhancement layer
             logger.info("Step 2/3: Converting to Profile 8...")
+            
+            # Pre-allocate output file to prevent thin-provisioning issues on Unraid
+            # This reserves disk space upfront so the file is placed on a drive with enough room
+            source_size = hevc_path.stat().st_size
+            self._preallocate_file(hevc_p8_path, source_size)
+            
             self._run_command(
                 [
                     "dovi_tool", "-m", "2",  # Mode 2 = Profile 7 to 8.1
@@ -319,6 +354,7 @@ class Processor:
                 ],
                 "Profile 7 to 8 conversion"
             )
+
             
             # Step 3: Remux with original audio/subtitles
             logger.info("Step 3/3: Remuxing final MKV...")

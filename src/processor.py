@@ -27,12 +27,20 @@ class DoViProfile(Enum):
     UNKNOWN = -1
 
 
+class ELType(Enum):
+    """Enhancement Layer types for Profile 7."""
+    MEL = "MEL"       # Minimal Enhancement Layer - safe to convert
+    FEL = "FEL"       # Full Enhancement Layer - may lose quality
+    UNKNOWN = "UNKNOWN"
+
+
 @dataclass
 class MediaAnalysis:
     """Result of analyzing a media file."""
     file_path: Path
     has_dovi: bool
     dovi_profile: Optional[DoViProfile]
+    el_type: Optional[ELType]  # FEL, MEL, or UNKNOWN for Profile 7
     video_codec: Optional[str]
     is_mkv: bool
     file_size_bytes: int
@@ -41,6 +49,11 @@ class MediaAnalysis:
     def needs_conversion(self) -> bool:
         """Check if this file needs Profile 7 to 8 conversion."""
         return self.has_dovi and self.dovi_profile == DoViProfile.PROFILE_7
+    
+    @property
+    def safe_to_auto_convert(self) -> bool:
+        """Check if this file is safe for automatic conversion (MEL only)."""
+        return self.needs_conversion and self.el_type == ELType.MEL
 
 
 class ProcessorError(Exception):
@@ -161,6 +174,7 @@ class Processor:
                 file_path=file_path,
                 has_dovi=False,
                 dovi_profile=None,
+                el_type=None,
                 video_codec=video_codec,
                 is_mkv=is_mkv,
                 file_size_bytes=file_size
@@ -170,10 +184,16 @@ class Processor:
         if profile == DoViProfile.UNKNOWN:
             profile = self._get_dovi_profile(file_path)
         
+        # Stage 3: For Profile 7, detect EL type (FEL vs MEL)
+        el_type = None
+        if profile == DoViProfile.PROFILE_7:
+            el_type = self._detect_el_type(file_path)
+        
         return MediaAnalysis(
             file_path=file_path,
             has_dovi=True,
             dovi_profile=profile,
+            el_type=el_type,
             video_codec=video_codec,
             is_mkv=is_mkv,
             file_size_bytes=file_size
@@ -292,6 +312,78 @@ class Processor:
             else:
                 logger.warning(f"dovi_tool profile detection failed: {e}")
             return DoViProfile.UNKNOWN
+
+    def _detect_el_type(self, file_path: Path) -> ELType:
+        """
+        Detect Enhancement Layer type (FEL vs MEL) for Profile 7 files.
+        
+        Uses dovi_tool info --summary to detect:
+        - FEL (Full Enhancement Layer): Has significant EL data that may be lost
+        - MEL (Minimal Enhancement Layer): Safe to convert with minimal loss
+        """
+        try:
+            import uuid
+            sample_path = self.temp_dir / f"el_sample_{uuid.uuid4().hex}.hevc"
+            
+            try:
+                # Extract a sample for analysis
+                self._run_command(
+                    [
+                        "ffmpeg", "-y",
+                        "-i", str(file_path),
+                        "-c:v", "copy",
+                        "-an", "-sn",
+                        "-t", "30",  # 30 seconds for better EL detection
+                        "-f", "hevc",
+                        str(sample_path)
+                    ],
+                    "HEVC sample extraction for EL detection"
+                )
+                
+                # Get detailed info from dovi_tool
+                result = self._run_command(
+                    ["dovi_tool", "info", "-i", str(sample_path), "--summary"],
+                    "dovi_tool EL type detection"
+                )
+                
+                output = (result.stdout + result.stderr).lower()
+                
+                # FEL indicators in dovi_tool output:
+                # - "FEL" or "full enhancement layer" mentioned
+                # - el_type: FEL
+                # - Significant L2/L8 trim data
+                if "fel" in output or "full enhancement" in output:
+                    logger.info(f"Detected FEL (Full Enhancement Layer): {file_path.name}")
+                    return ELType.FEL
+                
+                # MEL indicators:
+                # - "MEL" or "minimal enhancement layer" mentioned
+                # - el_type: MEL
+                if "mel" in output or "minimal enhancement" in output:
+                    logger.info(f"Detected MEL (Minimal Enhancement Layer): {file_path.name}")
+                    return ELType.MEL
+                
+                # If dovi_tool doesn't explicitly state, check for profile 7 with BL+EL
+                # Profile 7 with dual layer is typically FEL
+                if "profile 7" in output and ("bl+el" in output or "dual layer" in output):
+                    logger.info(f"Detected dual-layer Profile 7, assuming FEL: {file_path.name}")
+                    return ELType.FEL
+                
+                # Default: assume MEL if no FEL indicators found
+                # Most mainstream releases are MEL
+                logger.info(f"No FEL indicators found, assuming MEL: {file_path.name}")
+                return ELType.MEL
+                
+            finally:
+                if sample_path.exists():
+                    try:
+                        sample_path.unlink()
+                    except OSError:
+                        pass
+                        
+        except Exception as e:
+            logger.warning(f"EL type detection failed for {file_path.name}: {e}")
+            return ELType.UNKNOWN
     
     # -------------------------------------------------------------------------
     # Conversion

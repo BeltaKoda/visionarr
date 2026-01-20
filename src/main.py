@@ -21,7 +21,7 @@ from typing import List, Optional
 from .banner import print_banner
 from .config import Config, load_config, validate_config
 from .notifications import Notifier
-from .processor import DoViProfile, Processor
+from .processor import DoViProfile, ELType, Processor
 from .state import StateDB
 
 
@@ -324,8 +324,12 @@ class Visionarr:
                 )
                 
                 if analysis.needs_conversion:
-                    self.state.add_discovered(file_path_str, mkv_file.stem)
-                    logger.info(f"Found Profile 7: {mkv_file.name}")
+                    el_type_str = analysis.el_type.value if analysis.el_type else "UNKNOWN"
+                    self.state.add_discovered(file_path_str, mkv_file.stem, el_type_str)
+                    if analysis.el_type == ELType.FEL:
+                        logger.info(f"Found Profile 7 FEL (will skip auto): {mkv_file.name}")
+                    else:
+                        logger.info(f"Found Profile 7 MEL: {mkv_file.name}")
             except Exception as e:
                 logger.warning(f"Error analyzing {mkv_file.name}: {e}")
     
@@ -353,8 +357,12 @@ class Visionarr:
                 
                 if analysis.needs_conversion:
                     if not self.state.is_discovered(file_path_str) and not self.state.is_processed(file_path_str):
-                        self.state.add_discovered(file_path_str, mkv_file.stem)
-                        logger.info(f"Found Profile 7: {mkv_file.name}")
+                        el_type_str = analysis.el_type.value if analysis.el_type else "UNKNOWN"
+                        self.state.add_discovered(file_path_str, mkv_file.stem, el_type_str)
+                        if analysis.el_type == ELType.FEL:
+                            logger.info(f"Found Profile 7 FEL (will skip auto): {mkv_file.name}")
+                        else:
+                            logger.info(f"Found Profile 7 MEL: {mkv_file.name}")
             except Exception as e:
                 logger.warning(f"Error analyzing {mkv_file.name}: {e}")
 
@@ -388,14 +396,18 @@ class Visionarr:
         if auto_mode == "off":
             return  # Auto-processing disabled, don't process anything
         
-        # Get the next discovered file
-        discovered = self.state.get_discovered()
-        if not discovered:
-            return  # Nothing to process
+        # Get the next MEL file only (skip FEL for auto-processing)
+        mel_files = self.state.get_mel_files()
+        if not mel_files:
+            # Check if we have FEL files that are being skipped
+            fel_count = len(self.state.get_fel_files())
+            if fel_count > 0:
+                logger.debug(f"Skipping {fel_count} FEL file(s) from auto-processing")
+            return  # Nothing to process (or only FEL files)
         
         # Process just ONE file, then return to main loop
         # This allows the loop to check running/auto_mode before next file
-        item = discovered[0]
+        item = mel_files[0]
         file_path = Path(item['file_path'])
         
         if not file_path.exists():
@@ -643,9 +655,13 @@ class Visionarr:
                         
                         if analysis.needs_conversion:
                             profile7_files.append(mkv_file)
-                            # Save to DB for Manual Conversion selection
-                            self.state.add_discovered(file_path_str, mkv_file.stem)
-                            print(f"\n   ✅ PROFILE 7: {mkv_file.name}")
+                            # Save to DB for Manual Conversion selection with EL type
+                            el_type_str = analysis.el_type.value if analysis.el_type else "UNKNOWN"
+                            self.state.add_discovered(file_path_str, mkv_file.stem, el_type_str)
+                            if analysis.el_type == ELType.FEL:
+                                print(f"\n   ⚠️  PROFILE 7 FEL (skip auto): {mkv_file.name}")
+                            else:
+                                print(f"\n   ✅ PROFILE 7 MEL: {mkv_file.name}")
                     except PermissionError:
                         errors.append(f"Permission denied: {mkv_file}")
                     except Exception as e:

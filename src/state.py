@@ -69,6 +69,7 @@ class StateDB:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     file_path TEXT UNIQUE NOT NULL,
                     title TEXT NOT NULL,
+                    el_type TEXT DEFAULT 'UNKNOWN',
                     discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 
@@ -98,7 +99,16 @@ class StateDB:
                 CREATE INDEX IF NOT EXISTS idx_discovered_path ON discovered_files(file_path);
                 CREATE INDEX IF NOT EXISTS idx_scanned_path ON scanned_files(file_path);
             """)
+            
+            # Migration: Add el_type column if missing (for existing databases)
+            self._migrate_discovered_files_el_type(conn)
 
+    def _migrate_discovered_files_el_type(self, conn: sqlite3.Connection) -> None:
+        """Add el_type column to discovered_files if it doesn't exist (migration)."""
+        cursor = conn.execute("PRAGMA table_info(discovered_files)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "el_type" not in columns:
+            conn.execute("ALTER TABLE discovered_files ADD COLUMN el_type TEXT DEFAULT 'UNKNOWN'")
 
     
     @contextmanager
@@ -401,25 +411,58 @@ class StateDB:
 
     # ==================== Discovered Files Methods ====================
     
-    def add_discovered(self, file_path: str, title: str) -> bool:
+    def add_discovered(self, file_path: str, title: str, el_type: str = "UNKNOWN") -> bool:
         """Add a discovered Profile 7 file. Returns True if new, False if already exists."""
         with self._get_connection() as conn:
             try:
                 conn.execute(
-                    "INSERT OR IGNORE INTO discovered_files (file_path, title) VALUES (?, ?)",
-                    (file_path, title)
+                    "INSERT OR IGNORE INTO discovered_files (file_path, title, el_type) VALUES (?, ?, ?)",
+                    (file_path, title, el_type)
                 )
                 return conn.total_changes > 0
             except sqlite3.Error:
                 return False
 
+    def update_discovered_el_type(self, file_path: str, el_type: str) -> bool:
+        """Update the EL type for an existing discovered file."""
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE discovered_files SET el_type = ? WHERE file_path = ?",
+                (el_type, file_path)
+            )
+            return conn.total_changes > 0
+
     def get_discovered(self) -> List[dict]:
         """Get all discovered Profile 7 files not yet processed."""
         with self._get_connection() as conn:
             rows = conn.execute("""
-                SELECT d.id, d.file_path, d.title, d.discovered_at
+                SELECT d.id, d.file_path, d.title, d.el_type, d.discovered_at
                 FROM discovered_files d
                 WHERE d.file_path NOT IN (SELECT file_path FROM processed_files)
+                ORDER BY d.discovered_at DESC
+            """).fetchall()
+            return [dict(row) for row in rows]
+
+    def get_mel_files(self) -> List[dict]:
+        """Get discovered MEL Profile 7 files (safe to auto-convert)."""
+        with self._get_connection() as conn:
+            rows = conn.execute("""
+                SELECT d.id, d.file_path, d.title, d.el_type, d.discovered_at
+                FROM discovered_files d
+                WHERE d.el_type = 'MEL'
+                AND d.file_path NOT IN (SELECT file_path FROM processed_files)
+                ORDER BY d.discovered_at DESC
+            """).fetchall()
+            return [dict(row) for row in rows]
+
+    def get_fel_files(self) -> List[dict]:
+        """Get discovered FEL Profile 7 files (skipped from auto-convert)."""
+        with self._get_connection() as conn:
+            rows = conn.execute("""
+                SELECT d.id, d.file_path, d.title, d.el_type, d.discovered_at
+                FROM discovered_files d
+                WHERE d.el_type = 'FEL'
+                AND d.file_path NOT IN (SELECT file_path FROM processed_files)
                 ORDER BY d.discovered_at DESC
             """).fetchall()
             return [dict(row) for row in rows]

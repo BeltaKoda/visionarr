@@ -680,8 +680,10 @@ class Visionarr:
                             self.state.add_discovered(file_path_str, mkv_file.stem, el_type_str)
                             if analysis.el_type == ELType.FEL:
                                 print(f"\n   ⚠️  PROFILE 7 FEL (skip auto): {mkv_file.name}")
-                            else:
+                            elif analysis.el_type == ELType.MEL:
                                 print(f"\n   ✅ PROFILE 7 MEL: {mkv_file.name}")
+                            else:
+                                print(f"\n   ❔ PROFILE 7 UNKNOWN (EL detection failed): {mkv_file.name}")
                     except PermissionError:
                         errors.append(f"Permission denied: {mkv_file}")
                     except Exception as e:

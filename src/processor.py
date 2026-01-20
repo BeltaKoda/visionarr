@@ -166,8 +166,8 @@ class Processor:
         file_size = file_path.stat().st_size
         is_mkv = file_path.suffix.lower() == ".mkv"
         
-        # Stage 1: Fast mediainfo check (now returns profile if found)
-        has_dovi, profile, video_codec = self._check_dovi_mediainfo(file_path)
+        # Stage 1: Fast mediainfo check (now returns profile and el_type if found)
+        has_dovi, profile, video_codec, el_type = self._check_dovi_mediainfo(file_path)
         
         if not has_dovi:
             return MediaAnalysis(
@@ -184,9 +184,8 @@ class Processor:
         if profile == DoViProfile.UNKNOWN:
             profile = self._get_dovi_profile(file_path)
         
-        # Stage 3: For Profile 7, detect EL type (FEL vs MEL)
-        el_type = None
-        if profile == DoViProfile.PROFILE_7:
+        # Stage 3: For Profile 7, detect EL type (FEL vs MEL) if not already found by mediainfo
+        if profile == DoViProfile.PROFILE_7 and (el_type is None or el_type == ELType.UNKNOWN):
             el_type = self._detect_el_type(file_path)
         
         return MediaAnalysis(
@@ -199,10 +198,10 @@ class Processor:
             file_size_bytes=file_size
         )
     
-    def _check_dovi_mediainfo(self, file_path: Path) -> Tuple[bool, DoViProfile, Optional[str]]:
+    def _check_dovi_mediainfo(self, file_path: Path) -> Tuple[bool, DoViProfile, Optional[str], Optional[ELType]]:
         """
         Quick check for DoVi and profile using mediainfo.
-        Returns (has_dovi, profile, video_codec).
+        Returns (has_dovi, profile, video_codec, el_type).
         """
         try:
             result = self._run_command(
@@ -216,9 +215,11 @@ class Processor:
             video_codec = None
             has_dovi = False
             profile = DoViProfile.UNKNOWN
+            el_type = ELType.UNKNOWN
             
-            for track in tracks:
-                if track.get("@type") == "Video":
+            video_tracks = [t for t in tracks if t.get("@type") == "Video"]
+            
+            for track in video_tracks:
                     video_codec = track.get("Format", "")
                     
                     # Check for DoVi indicators
@@ -231,12 +232,31 @@ class Processor:
                         has_dovi = True
                         if ".07" in profile_str:
                             profile = DoViProfile.PROFILE_7
+                            # Check if mediainfo explicitly mentions FEL for this or subsequent tracks
+                            for t in video_tracks:
+                                features = t.get("HDR_Format_AdditionalFeatures", "").upper()
+                                comm_name = t.get("HDR_Format_Commercial_Name", "").upper()
+                                if "FEL" in features or "FULL ENHANCEMENT" in comm_name:
+                                    el_type = ELType.FEL
+                                    break
+                                elif "MEL" in features or "MINIMAL ENHANCEMENT" in comm_name:
+                                    el_type = ELType.MEL
+                            
+                            # Heuristic: Dual video tracks in P7 usually means FEL if not explicitly MEL
+                            if el_type == ELType.UNKNOWN and len(video_tracks) > 1:
+                                # Check the second track's properties
+                                el_track = video_tracks[1]
+                                width = int(el_track.get("Width", 0))
+                                bitrate = int(el_track.get("BitRate", 0))
+                                if width >= 1920 or bitrate > 1000000: # Broad heuristic
+                                    el_type = ELType.FEL
+                                else:
+                                    el_type = ELType.MEL
                         elif ".08" in profile_str:
                             profile = DoViProfile.PROFILE_8
                         elif ".05" in profile_str:
                             profile = DoViProfile.PROFILE_5
                         elif "dvav.04" in profile_str:
-                            # Sometimes mediainfo reports profile 4 which is obsolete
                             profile = DoViProfile.UNKNOWN
                         break
                     
@@ -244,11 +264,11 @@ class Processor:
                         has_dovi = True
                         break
             
-            return has_dovi, profile, video_codec
+            return has_dovi, profile, video_codec, el_type
             
         except Exception as e:
             logger.warning(f"mediainfo check failed: {e}")
-            return False, DoViProfile.UNKNOWN, None
+            return False, DoViProfile.UNKNOWN, None, ELType.UNKNOWN
     
     def _get_dovi_profile(self, file_path: Path) -> DoViProfile:
         """

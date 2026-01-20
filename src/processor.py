@@ -336,74 +336,88 @@ class Processor:
     def _detect_el_type(self, file_path: Path) -> ELType:
         """
         Detect Enhancement Layer type (FEL vs MEL) for Profile 7 files.
-        
-        Uses dovi_tool info --summary to detect:
-        - FEL (Full Enhancement Layer): Has significant EL data that may be lost
-        - MEL (Minimal Enhancement Layer): Safe to convert with minimal loss
+
+        Uses dovi_tool extract-rpu + export to get JSON with el_type field.
+        Falls back to MEL if detection fails (most releases are MEL).
         """
-        try:
-            import uuid
-            sample_path = self.temp_dir / f"el_sample_{uuid.uuid4().hex}.hevc"
-            
+        import uuid
+
+        # Try with short sample first (fast), then longer if needed
+        for duration in [5, 30]:
             try:
-                # Extract a sample for analysis
-                self._run_command(
-                    [
-                        "ffmpeg", "-y",
+                rpu_path = self.temp_dir / f"rpu_{uuid.uuid4().hex}.bin"
+                json_path = self.temp_dir / f"rpu_{uuid.uuid4().hex}.json"
+
+                try:
+                    # Pipe ffmpeg to dovi_tool extract-rpu (no temp video file)
+                    ffmpeg_cmd = [
+                        "ffmpeg", "-v", "error", "-y",
                         "-i", str(file_path),
                         "-c:v", "copy",
-                        "-an", "-sn",
-                        "-t", "30",  # 30 seconds for better EL detection
+                        "-bsf:v", "hevc_mp4toannexb",
                         "-f", "hevc",
-                        str(sample_path)
-                    ],
-                    "HEVC sample extraction for EL detection"
-                )
-                
-                # Get detailed info from dovi_tool
-                result = self._run_command(
-                    ["dovi_tool", "info", "-i", str(sample_path), "--summary"],
-                    "dovi_tool EL type detection"
-                )
-                
-                output = (result.stdout + result.stderr).lower()
-                
-                # FEL indicators in dovi_tool output:
-                # - "FEL" or "full enhancement layer" mentioned
-                # - el_type: FEL
-                # - Significant L2/L8 trim data
-                if "fel" in output or "full enhancement" in output:
-                    logger.info(f"Detected FEL (Full Enhancement Layer): {file_path.name}")
-                    return ELType.FEL
-                
-                # MEL indicators:
-                # - "MEL" or "minimal enhancement layer" mentioned
-                # - el_type: MEL
-                if "mel" in output or "minimal enhancement" in output:
-                    logger.info(f"Detected MEL (Minimal Enhancement Layer): {file_path.name}")
-                    return ELType.MEL
-                
-                # If dovi_tool doesn't explicitly state, check for profile 7 with BL+EL
-                # Profile 7 with dual layer is typically FEL
-                if "profile 7" in output and ("bl+el" in output or "dual layer" in output):
-                    logger.info(f"Detected dual-layer Profile 7, assuming FEL: {file_path.name}")
-                    return ELType.FEL
-                
-                # Default: assume MEL if no FEL indicators found
-                # Most mainstream releases are MEL
-                logger.info(f"No FEL indicators found, assuming MEL: {file_path.name}")
-                return ELType.MEL
-                
-            finally:
-                if sample_path.exists():
-                    try:
-                        sample_path.unlink()
-                    except OSError:
-                        pass
-                        
-        except Exception as e:
-            logger.warning(f"EL type detection failed for {file_path.name}: {e}")
-            return ELType.UNKNOWN
+                        "-t", str(duration),
+                        "-"
+                    ]
+
+                    dovi_cmd = ["dovi_tool", "extract-rpu", "-", "-o", str(rpu_path)]
+
+                    # Run piped: ffmpeg | dovi_tool
+                    ffmpeg_proc = subprocess.Popen(
+                        ffmpeg_cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE
+                    )
+                    dovi_proc = subprocess.Popen(
+                        dovi_cmd,
+                        stdin=ffmpeg_proc.stdout,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE
+                    )
+                    ffmpeg_proc.stdout.close()
+                    dovi_proc.communicate(timeout=300)
+
+                    if dovi_proc.returncode != 0 or not rpu_path.exists():
+                        continue  # Try next duration
+
+                    # Export RPU to JSON
+                    export_result = subprocess.run(
+                        ["dovi_tool", "export", "-i", str(rpu_path), "-d", f"all={json_path}"],
+                        capture_output=True, text=True, timeout=60
+                    )
+
+                    if export_result.returncode != 0 or not json_path.exists():
+                        continue
+
+                    # Parse JSON for el_type
+                    with open(json_path, 'r') as f:
+                        content = f.read()
+
+                    if '"el_type":"FEL"' in content or '"el_type": "FEL"' in content:
+                        logger.info(f"Detected FEL (Full Enhancement Layer): {file_path.name}")
+                        return ELType.FEL
+                    elif '"el_type":"MEL"' in content or '"el_type": "MEL"' in content:
+                        logger.info(f"Detected MEL (Minimal Enhancement Layer): {file_path.name}")
+                        return ELType.MEL
+
+                    # el_type not in JSON - try next duration for more data
+
+                finally:
+                    # Clean up temp files
+                    for p in [rpu_path, json_path]:
+                        if p.exists():
+                            try:
+                                p.unlink()
+                            except OSError:
+                                pass
+
+            except Exception as e:
+                logger.debug(f"EL detection attempt failed (duration={duration}s): {e}")
+                continue
+
+        # All attempts failed - default to MEL (most releases are MEL)
+        logger.warning(f"EL type detection failed for {file_path.name}, assuming MEL")
+        return ELType.MEL
     
     # -------------------------------------------------------------------------
     # Conversion

@@ -155,6 +155,7 @@ class StateDB:
         "delta_scan_interval": "30",      # minutes
         "full_scan_day": "sunday",        # day name
         "full_scan_time": "03:00",        # HH:MM
+        "auto_process_fel": "false",      # true, false
     }
     
     def _init_settings_defaults(self) -> None:

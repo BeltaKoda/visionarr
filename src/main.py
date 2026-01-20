@@ -402,14 +402,26 @@ class Visionarr:
         if auto_mode == "off":
             return  # Auto-processing disabled, don't process anything
         
-        # Get the next MEL file only (skip FEL for auto-processing)
-        mel_files = self.state.get_mel_files()
-        if not mel_files:
-            # Check if we have FEL files that are being skipped
-            fel_count = len(self.state.get_fel_files())
-            if fel_count > 0:
-                logger.debug(f"Skipping {fel_count} FEL file(s) from auto-processing")
-            return  # Nothing to process (or only FEL files)
+        # Check if we should process FEL files automatically
+        process_fel = self.state.get_setting("auto_process_fel") == "true"
+        
+        # Get candidate files
+        if process_fel:
+            # Get all Profile 7 files (MEL and FEL)
+            all_files = self.state.get_discovered()
+            if not all_files:
+                return
+            item = all_files[0]
+        else:
+            # Get the next MEL file only (skip FEL for auto-processing)
+            mel_files = self.state.get_mel_files()
+            if not mel_files:
+                # Check if we have FEL files that are being skipped
+                fel_count = len(self.state.get_fel_files())
+                if fel_count > 0:
+                    logger.debug(f"Skipping {fel_count} FEL file(s) from auto-processing")
+                return  # Nothing to process (or only FEL files)
+            item = mel_files[0]
         
         # Process just ONE file, then return to main loop
         # This allows the loop to check running/auto_mode before next file
@@ -779,14 +791,17 @@ class Visionarr:
                 
                 for display_num, (orig_idx, item) in enumerate(filtered[start_idx:end_idx], start=start_idx + 1):
                     mark = "[x]" if orig_idx in selected_indices else "[ ]"
-                    el_tag = f"[{item.get('el_type', 'UNK')}]"
+                    el_type = item.get('el_type', 'UNK')
+                    el_tag = f"[{el_type}]" if el_type != 'FEL' else "[FEL ⚠️]"
                     title = item['title'][:42] + "..." if len(item['title']) > 42 else item['title']
                     print(f"  {mark} {display_num}. {el_tag} {title}")
                 
                 print("-" * 55)
                 print(f"Selected: {len(selected_indices)} file(s)")
+                print("💡 FEL = Full Enhancement Layer (lossy conversion)")
+                print("   MEL = Minimal Enhancement Layer (safe conversion)")
                 filter_hint = f" | filter:'{search_term}'" if search_term else ""
-                print(f"[1-{len(filtered)}]=toggle, n/p=page, s=search, c=clear, d=done, q=quit{filter_hint}")
+                print(f"[1-{len(filtered)}]=toggle, n/p=page, s=search, d=done, q=quit{filter_hint}")
                 
                 cmd = input("> ").strip().lower()
                 
@@ -970,7 +985,8 @@ class Visionarr:
                 
                 for i in range(start_idx, end_idx):
                     item = filtered[i]
-                    el_tag = f"[{item.get('el_type', 'UNK')}]"
+                    el_type = item.get('el_type', 'UNK')
+                    el_tag = f"[{el_type}]" if el_type != 'FEL' else "[FEL ⚠️]"
                     title = item['title'][:45] + "..." if len(item['title']) > 45 else item['title']
                     print(f"  {i+1}. {el_tag} {title}")
                     print(f"      {item['file_path'][:60]}...")
@@ -1036,7 +1052,7 @@ class Visionarr:
                 backup_status = "YES" if backup_path.exists() else "NO"
                 
                 processed_at = item.processed_at.strftime("%Y-%m-%d %H:%M")
-                el_tag = f"[{item.el_type}]"
+                el_tag = f"[{item.el_type}]" if item.el_type != 'FEL' else "[FEL ⚠️]"
                 print(f"  {i+1}. {el_tag} {title}")
                 print(f"      Profile: {item.original_profile} -> {item.new_profile} | {processed_at} | Backup: {backup_status}")
             
@@ -1121,6 +1137,8 @@ class Visionarr:
             delta_interval = settings.get("delta_scan_interval", "30")
             full_day = settings.get("full_scan_day", "sunday").capitalize()
             full_time = settings.get("full_scan_time", "03:00")
+            fel_auto = settings.get("auto_process_fel", "false") == "true"
+            fel_status = "ON (Auto)" if fel_auto else "OFF (Manual Only)"
             
             print("\n" + "=" * 50)
             print("           SETTINGS           ")
@@ -1130,7 +1148,8 @@ class Visionarr:
             print(f"  3. Delta Scan Interval: {delta_interval} min")
             print(f"  4. Full Scan Day: {full_day}")
             print(f"  5. Full Scan Time: {full_time}")
-            print("  6. ← Back")
+            print(f"  6. Toggle FEL Auto-Processing: {fel_status}")
+            print("  7. ← Back")
             print("=" * 50)
             print("\nPress a number to select:")
             
@@ -1173,6 +1192,13 @@ class Visionarr:
                 except ValueError:
                     print("Invalid format. Use HH:MM")
             elif choice == "6":
+                new_val = "false" if fel_auto else "true"
+                self.state.set_setting("auto_process_fel", new_val)
+                print(f"\n✅ Profile 7 FEL Auto-Processing set to: {'ENABLED' if new_val == 'true' else 'DISABLED'}")
+                if new_val == "true":
+                    print("   ⚠️  Note: FEL files will now be auto-converted to Profile 8 (Lossy).")
+                input("\nPress Enter to continue...")
+            elif choice == "7":
                 break
     
     def _change_auto_process_mode(self) -> None:

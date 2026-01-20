@@ -22,7 +22,9 @@
 
 **Dolby Vision Profile 7** was designed for UHD Blu-ray discs. It uses a **dual-layer** format:
 - **Base layer:** Standard HDR10 video
-- **Enhancement layer:** Additional Dolby Vision metadata (MEL/FEL)
+- **Enhancement layer:** Additional Dolby Vision metadata.
+    - **MEL (Minimal Enhancement Layer):** Contains only metadata, easy to convert.
+    - **FEL (Full Enhancement Layer):** Contains metadata AND additional video data for 12-bit depth. Converting FEL to Profile 8 results in a slight (usually unnoticeable) loss of the 12-bit data, as Profile 8 is 10-bit.
 
 This dual-layer design works great in physical Blu-ray players, but causes problems with streaming:
 
@@ -90,6 +92,7 @@ See [.env.example](.env.example) for all available options.
 | `FULL_SCAN_DAY` | sunday | Day of week for full library scan |
 | `FULL_SCAN_TIME` | 03:00 | Time for full scan (24h format) |
 | `BACKUP_ENABLED` | true | Keep .original backup files |
+| `AUTO_PROCESS_FEL` | false | Auto-convert FEL files (Lossy) |
 
 ## License
 

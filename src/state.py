@@ -22,9 +22,9 @@ class ProcessedFile:
     file_path: str
     original_profile: str
     new_profile: str
-    el_type: str = "UNKNOWN"
     processed_at: datetime
     file_size_bytes: int
+    el_type: str = "UNKNOWN"
 
 
 @dataclass

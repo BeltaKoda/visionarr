@@ -139,11 +139,13 @@ class Visionarr:
             self.processor.convert_to_profile8(file_path)
             
             # Mark as processed
+            el_type_str = analysis.el_type.value if analysis.el_type else "UNKNOWN"
             self.state.mark_processed(
                 file_path_str,
                 original_profile="7",
                 new_profile="8",
-                file_size_bytes=analysis.file_size_bytes
+                file_size_bytes=analysis.file_size_bytes,
+                el_type=el_type_str
             )
             
             # Remove from discovered files
@@ -316,11 +318,13 @@ class Visionarr:
                 profile_str = None
                 if analysis.dovi_profile:
                     profile_str = str(analysis.dovi_profile.value)
+                el_type_str = analysis.el_type.value if analysis.el_type else "UNKNOWN"
                 self.state.add_scanned(
                     file_path_str,
                     analysis.has_dovi,
                     profile_str,
-                    analysis.file_size_bytes
+                    analysis.file_size_bytes,
+                    el_type_str
                 )
                 
                 if analysis.needs_conversion:
@@ -348,11 +352,13 @@ class Visionarr:
                 profile_str = None
                 if analysis.dovi_profile:
                     profile_str = str(analysis.dovi_profile.value)
+                el_type_str = analysis.el_type.value if analysis.el_type else "UNKNOWN"
                 self.state.add_scanned(
                     file_path_str,
                     analysis.has_dovi,
                     profile_str,
-                    analysis.file_size_bytes
+                    analysis.file_size_bytes,
+                    el_type_str
                 )
                 
                 if analysis.needs_conversion:
@@ -646,11 +652,13 @@ class Visionarr:
                         profile_str = None
                         if analysis.dovi_profile:
                             profile_str = str(analysis.dovi_profile.value)
+                        el_type_str = analysis.el_type.value if analysis.el_type else "UNKNOWN"
                         self.state.add_scanned(
                             file_path_str,
                             analysis.has_dovi,
                             profile_str,
-                            analysis.file_size_bytes
+                            analysis.file_size_bytes,
+                            el_type_str
                         )
                         
                         if analysis.needs_conversion:
@@ -771,8 +779,9 @@ class Visionarr:
                 
                 for display_num, (orig_idx, item) in enumerate(filtered[start_idx:end_idx], start=start_idx + 1):
                     mark = "[x]" if orig_idx in selected_indices else "[ ]"
+                    el_tag = f"[{item.get('el_type', 'UNK')}]"
                     title = item['title'][:42] + "..." if len(item['title']) > 42 else item['title']
-                    print(f"  {mark} {display_num}. {title}")
+                    print(f"  {mark} {display_num}. {el_tag} {title}")
                 
                 print("-" * 55)
                 print(f"Selected: {len(selected_indices)} file(s)")
@@ -961,8 +970,9 @@ class Visionarr:
                 
                 for i in range(start_idx, end_idx):
                     item = filtered[i]
+                    el_tag = f"[{item.get('el_type', 'UNK')}]"
                     title = item['title'][:45] + "..." if len(item['title']) > 45 else item['title']
-                    print(f"  {i+1}. {title}")
+                    print(f"  {i+1}. {el_tag} {title}")
                     print(f"      {item['file_path'][:60]}...")
                 
                 print("-" * 55)
@@ -1026,7 +1036,8 @@ class Visionarr:
                 backup_status = "YES" if backup_path.exists() else "NO"
                 
                 processed_at = item.processed_at.strftime("%Y-%m-%d %H:%M")
-                print(f"  {i+1}. {title}")
+                el_tag = f"[{item.el_type}]"
+                print(f"  {i+1}. {el_tag} {title}")
                 print(f"      Profile: {item.original_profile} -> {item.new_profile} | {processed_at} | Backup: {backup_status}")
             
             print("-" * 55)

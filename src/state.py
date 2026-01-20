@@ -22,6 +22,7 @@ class ProcessedFile:
     file_path: str
     original_profile: str
     new_profile: str
+    el_type: str = "UNKNOWN"
     processed_at: datetime
     file_size_bytes: int
 
@@ -53,6 +54,7 @@ class StateDB:
                     file_path TEXT UNIQUE NOT NULL,
                     original_profile TEXT NOT NULL,
                     new_profile TEXT NOT NULL,
+                    el_type TEXT DEFAULT 'UNKNOWN',
                     processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     file_size_bytes INTEGER NOT NULL
                 );
@@ -78,6 +80,7 @@ class StateDB:
                     file_path TEXT UNIQUE NOT NULL,
                     has_dovi BOOLEAN NOT NULL,
                     dovi_profile TEXT,
+                    el_type TEXT DEFAULT 'UNKNOWN',
                     file_size_bytes INTEGER NOT NULL,
                     scanned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
@@ -102,6 +105,8 @@ class StateDB:
             
             # Migration: Add el_type column if missing (for existing databases)
             self._migrate_discovered_files_el_type(conn)
+            self._migrate_processed_files_el_type(conn)
+            self._migrate_scanned_files_el_type(conn)
 
     def _migrate_discovered_files_el_type(self, conn: sqlite3.Connection) -> None:
         """Add el_type column to discovered_files if it doesn't exist (migration)."""
@@ -109,6 +114,20 @@ class StateDB:
         columns = [row[1] for row in cursor.fetchall()]
         if "el_type" not in columns:
             conn.execute("ALTER TABLE discovered_files ADD COLUMN el_type TEXT DEFAULT 'UNKNOWN'")
+
+    def _migrate_processed_files_el_type(self, conn: sqlite3.Connection) -> None:
+        """Add el_type column to processed_files if it doesn't exist (migration)."""
+        cursor = conn.execute("PRAGMA table_info(processed_files)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "el_type" not in columns:
+            conn.execute("ALTER TABLE processed_files ADD COLUMN el_type TEXT DEFAULT 'UNKNOWN'")
+
+    def _migrate_scanned_files_el_type(self, conn: sqlite3.Connection) -> None:
+        """Add el_type column to scanned_files if it doesn't exist (migration)."""
+        cursor = conn.execute("PRAGMA table_info(scanned_files)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "el_type" not in columns:
+            conn.execute("ALTER TABLE scanned_files ADD COLUMN el_type TEXT DEFAULT 'UNKNOWN'")
 
     
     @contextmanager
@@ -188,15 +207,16 @@ class StateDB:
         file_path: str,
         original_profile: str,
         new_profile: str,
-        file_size_bytes: int
+        file_size_bytes: int,
+        el_type: str = "UNKNOWN"
     ) -> None:
         """Mark a file as successfully processed."""
         with self._get_connection() as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO processed_files 
-                (file_path, original_profile, new_profile, file_size_bytes, processed_at)
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-            """, (file_path, original_profile, new_profile, file_size_bytes))
+                (file_path, original_profile, new_profile, el_type, file_size_bytes, processed_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """, (file_path, original_profile, new_profile, el_type, file_size_bytes))
             
             # Remove from failed if it was there
             conn.execute("DELETE FROM failed_files WHERE file_path = ?", (file_path,))
@@ -205,7 +225,7 @@ class StateDB:
         """Get list of processed files, most recent first."""
         with self._get_connection() as conn:
             cursor = conn.execute("""
-                SELECT id, file_path, original_profile, new_profile, processed_at, file_size_bytes
+                SELECT id, file_path, original_profile, new_profile, el_type, processed_at, file_size_bytes
                 FROM processed_files
                 ORDER BY processed_at DESC
                 LIMIT ?
@@ -217,6 +237,7 @@ class StateDB:
                     file_path=row["file_path"],
                     original_profile=row["original_profile"],
                     new_profile=row["new_profile"],
+                    el_type=row["el_type"],
                     processed_at=datetime.fromisoformat(row["processed_at"]),
                     file_size_bytes=row["file_size_bytes"]
                 )
@@ -491,7 +512,7 @@ class StateDB:
 
     # ==================== Scanned Files Methods ====================
     
-    def add_scanned(self, file_path: str, has_dovi: bool, dovi_profile: Optional[str], file_size_bytes: int) -> bool:
+    def add_scanned(self, file_path: str, has_dovi: bool, dovi_profile: Optional[str], file_size_bytes: int, el_type: str = "UNKNOWN") -> bool:
         """
         Record a scanned file with its DoVi profile status.
         Returns True if new record, False if already existed (updated).
@@ -500,9 +521,9 @@ class StateDB:
             try:
                 conn.execute("""
                     INSERT OR REPLACE INTO scanned_files 
-                    (file_path, has_dovi, dovi_profile, file_size_bytes, scanned_at)
-                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                """, (file_path, has_dovi, dovi_profile, file_size_bytes))
+                    (file_path, has_dovi, dovi_profile, el_type, file_size_bytes, scanned_at)
+                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """, (file_path, has_dovi, dovi_profile, el_type, file_size_bytes))
                 return True
             except Exception:
                 return False

@@ -22,8 +22,8 @@ from .banner import print_banner
 from .config import Config, load_config, validate_config
 from .notifications import Notifier
 from .processor import DoViProfile, Processor
-from .queue_manager import ConversionJob, JobStatus, QueueManager
 from .state import StateDB
+
 
 __version__ = "1.0.0"
 
@@ -89,84 +89,91 @@ class Visionarr:
         self.last_delta_scan: Optional[datetime] = None
         self.last_full_scan_date: Optional[str] = None  # Track by date string
         
-        # Initialize queue
-        self.queue = QueueManager(
-            process_callback=self._process_job,
-            on_complete_callback=self._on_job_complete,
-            on_fail_callback=self._on_job_fail,
-            max_workers=config.process_concurrency
-        )
+        # Conversion tracking (no queue - process directly)
+        self.is_converting = False
         
         # Initialize notifier if webhook configured
         self.notifier: Optional[Notifier] = None
         if config.webhook_url:
             self.notifier = Notifier(config.webhook_url)
     
-    def _process_job(self, job: ConversionJob) -> bool:
-        """Process a single conversion job. Returns True if converted, False if skipped."""
-        file_path = job.file_path
+    def _convert_file(self, file_path: Path, title: str) -> bool:
+        """
+        Convert a single file. Returns True if converted, False if skipped.
+        This replaces the queue-based processing with direct conversion.
+        """
+        file_path_str = str(file_path)
         
-        # Check if already processed
-        if self.state.is_processed(str(file_path)):
-            logger.info(f"Already processed, skipping: {file_path}")
-            return False
+        # Mark as currently converting (for status display)
+        self.state.set_current_conversion(file_path_str, title)
+        self.is_converting = True
+        start_time = datetime.now()
         
-        # Check if file exists
-        if not file_path.exists():
-            logger.warning(f"File not found, skipping: {file_path}")
-            return False
-        
-        # Analyze file
-        analysis = self.processor.analyze_file(file_path)
-        
-        if not analysis.needs_conversion:
-            if analysis.has_dovi:
-                logger.info(f"Already Profile 8, skipping: {file_path}")
-            else:
-                logger.debug(f"No DoVi content, skipping: {file_path}")
-            return False
-        
-        # Check disk space
-        if not self.processor.check_disk_space(file_path):
-            raise Exception("Insufficient disk space for conversion")
-        
-        # Perform conversion
-        logger.info(f"Profile 7 detected, converting: {job.title}")
-        self.processor.convert_to_profile8(file_path)
-        
-        # Mark as processed
-        self.state.mark_processed(
-            str(file_path),
-            original_profile="7",
-            new_profile="8",
-            file_size_bytes=analysis.file_size_bytes
-        )
-        
-        return True
-    
-    def _on_job_complete(self, job: ConversionJob) -> None:
-        """Called when a job completes successfully."""
-        # Remove from discovered files since it's now processed
-        self.state.remove_discovered(str(job.file_path))
-        
-        # Send notification
-        if self.notifier:
-            self.notifier.notify_conversion_success(
-                job.file_path,
-                job.title,
-                job.duration_seconds
+        try:
+            # Check if already processed
+            if self.state.is_processed(file_path_str):
+                logger.info(f"Already processed, skipping: {file_path}")
+                return False
+            
+            # Check if file exists
+            if not file_path.exists():
+                logger.warning(f"File not found, skipping: {file_path}")
+                return False
+            
+            # Analyze file
+            analysis = self.processor.analyze_file(file_path)
+            
+            if not analysis.needs_conversion:
+                if analysis.has_dovi:
+                    logger.info(f"Already Profile 8, skipping: {file_path}")
+                else:
+                    logger.debug(f"No DoVi content, skipping: {file_path}")
+                return False
+            
+            # Check disk space
+            if not self.processor.check_disk_space(file_path):
+                raise Exception("Insufficient disk space for conversion")
+            
+            # Perform conversion
+            logger.info(f"Profile 7 detected, converting: {title}")
+            self.processor.convert_to_profile8(file_path)
+            
+            # Mark as processed
+            self.state.mark_processed(
+                file_path_str,
+                original_profile="7",
+                new_profile="8",
+                file_size_bytes=analysis.file_size_bytes
             )
-    
-    def _on_job_fail(self, job: ConversionJob) -> None:
-        """Called when a job fails after all retries."""
-        self.state.mark_failed(str(job.file_path), job.error_message or "Unknown error")
-        
-        if self.notifier:
-            self.notifier.notify_conversion_failed(
-                job.file_path,
-                job.title,
-                job.error_message or "Unknown error"
-            )
+            
+            # Remove from discovered files
+            self.state.remove_discovered(file_path_str)
+            
+            # Calculate duration
+            duration = (datetime.now() - start_time).total_seconds()
+            logger.info(f"Completed: {title} ({duration:.1f}s)")
+            
+            # Send success notification
+            if self.notifier:
+                self.notifier.notify_conversion_success(file_path, title, duration)
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Conversion failed for {title}: {e}")
+            self.state.mark_failed(file_path_str, str(e))
+            
+            # Send failure notification
+            if self.notifier:
+                self.notifier.notify_conversion_failed(file_path, title, str(e))
+            
+            return False
+            
+        finally:
+            # Clear current conversion status
+            self.state.clear_current_conversion()
+            self.is_converting = False
+
     
     def run_daemon(self) -> None:
         """Run in daemon mode with scheduled filesystem scans."""
@@ -208,9 +215,6 @@ class Visionarr:
         if cleaned:
             logger.info(f"Cleaned up {cleaned} orphaned work directories")
         
-        # Start queue workers
-        self.queue.start()
-        
         # Send startup notification
         if self.notifier:
             self.notifier.notify_startup()
@@ -239,20 +243,24 @@ class Visionarr:
                     self._run_daemon_delta_scan()
                     self.last_delta_scan = now
                 
-                # Process any discovered files that are pending
-                self._queue_pending_discoveries()
+                # Process discovered files directly (no queue)
+                # Check auto-processing before EACH file so disabling stops immediately
+                self._process_next_discovered()
                 
             except Exception as e:
                 logger.error(f"Scheduler error: {e}")
             
-            # Check every minute
-            for _ in range(60):
-                if not self.running:
-                    break
-                time.sleep(1)
+            # Short sleep between processing attempts
+            # If actively converting, loop immediately; otherwise wait a bit
+            if not self.is_converting:
+                for _ in range(60):
+                    if not self.running:
+                        break
+                    time.sleep(1)
         
         # Shutdown
         self._shutdown()
+
     
     def _should_run_delta_scan(self, now: datetime) -> bool:
         """Check if it's time for a delta scan."""
@@ -370,17 +378,34 @@ class Visionarr:
         
         return files
     
-    def _queue_pending_discoveries(self) -> None:
-        """Queue any discovered files for conversion."""
+    def _process_next_discovered(self) -> None:
+        """
+        Process the next discovered file directly (no queue).
+        Checks auto-processing setting before each file so disabling stops immediately.
+        """
+        # Check if auto-processing is still enabled
+        auto_mode = self.state.get_setting("auto_process_mode") or "off"
+        if auto_mode == "off":
+            return  # Auto-processing disabled, don't process anything
+        
+        # Get the next discovered file
         discovered = self.state.get_discovered()
-        for item in discovered:
-            file_path = Path(item['file_path'])
-            if file_path.exists():
-                self.queue.add_job(
-                    file_path=file_path,
-                    media_id=0,
-                    title=item['title']
-                )
+        if not discovered:
+            return  # Nothing to process
+        
+        # Process just ONE file, then return to main loop
+        # This allows the loop to check running/auto_mode before next file
+        item = discovered[0]
+        file_path = Path(item['file_path'])
+        
+        if not file_path.exists():
+            # File disappeared, remove from discovered
+            self.state.remove_discovered(item['file_path'])
+            logger.warning(f"File no longer exists, removed from queue: {item['title']}")
+            return
+        
+        # Convert this file (blocking)
+        self._convert_file(file_path, item['title'])
     
     def _signal_handler(self, signum, frame) -> None:
         """Handle shutdown signals."""
@@ -391,8 +416,8 @@ class Visionarr:
         """Clean shutdown."""
         logger.info("Shutting down...")
         
-        # Stop queue and wait for current jobs
-        self.queue.stop(wait=True)
+        # Clear any conversion in progress marker
+        self.state.clear_current_conversion()
         
         # Send shutdown notification
         if self.notifier:
@@ -409,9 +434,7 @@ class Visionarr:
         """Run interactive manual mode."""
         print_banner(__version__)
         
-        # Start queue workers so jobs actually process
-        self.queue.start()
-        
+
         while True:
             # Get auto-processing status from database
             auto_mode = self.state.get_setting("auto_process_mode") or "off"
@@ -784,24 +807,32 @@ class Visionarr:
             if cmd == "d" and selected_indices:
                 break
         
-        # Queue selected files
-        print(f"\nQueuing {len(selected_indices)} file(s) for conversion...")
-        for idx in selected_indices:
+        # Process selected files directly (no queue)
+        print(f"\nConverting {len(selected_indices)} file(s)...")
+        print("-" * 55)
+        
+        converted = 0
+        failed = 0
+        for i, idx in enumerate(selected_indices, 1):
             item = discovered[idx]
             file_path = Path(item['file_path'])
-            self.queue.add_job(
-                file_path=file_path,
-                media_id=0,
-                title=item['title']
-            )
+            print(f"\n[{i}/{len(selected_indices)}] {item['title'][:45]}...")
+            
+            try:
+                if self._convert_file(file_path, item['title']):
+                    converted += 1
+                    print(f"   ✅ Converted successfully")
+                else:
+                    print(f"   ⏭️  Skipped (already converted or no DoVi)")
+            except Exception as e:
+                failed += 1
+                print(f"   ❌ Failed: {str(e)[:40]}")
         
-        print(f"✅ {len(selected_indices)} file(s) added to queue")
-        print("\n  m = Return to menu")
-        print("  s = View live status")
-        
-        choice = input("\nSelect option: ").strip().lower()
-        if choice == "s":
-            self._manual_view_status_live()
+        print("\n" + "=" * 55)
+        print(f"CONVERSION COMPLETE: {converted} converted, {failed} failed")
+        print("=" * 55)
+        input("\nPress Enter to continue...")
+
 
 
     def _manual_view_status_live(self) -> None:
@@ -822,26 +853,29 @@ class Visionarr:
                 print(f"VISIONARR LIVE STATUS  {time.strftime('%H:%M:%S')}")
                 print("=" * 50)
                 
-                jobs = self.queue.get_jobs()
-                active = [j for j in jobs if j.status == JobStatus.PROCESSING]
-                pending = [j for j in jobs if j.status == JobStatus.PENDING]
-                completed = [j for j in jobs if j.status == JobStatus.COMPLETED]
+                # Get current conversion from DB
+                current = self.state.get_current_conversion()
+                discovered = self.state.get_discovered()
+                processed_count = len(self.state.get_processed_files(limit=10000))
                 
-                print(f"Queue Stats: 🟢 {len(active)} Running | 🟡 {len(pending)} Pending | ✅ {len(completed)} Done")
+                print(f"📊 Stats: {processed_count} converted | {len(discovered)} pending")
                 print("-" * 50)
                 
-                if active:
+                if current:
                     print("Currently Processing:")
-                    for job in active:
-                        print(f"  🔄 {job.title}")
+                    print(f"  🔄 {current['title']}")
                 else:
                     print("No active conversions.")
                     
-                print("\nPending:")
-                for job in pending[:5]:
-                    print(f"  ⏳ {job.title}")
-                if len(pending) > 5:
-                    print(f"     ... {len(pending)-5} more")
+                print("\nPending Files:")
+                if discovered:
+                    for item in discovered[:5]:
+                        title = item['title'][:40] + "..." if len(item['title']) > 40 else item['title']
+                        print(f"  ⏳ {title}")
+                    if len(discovered) > 5:
+                        print(f"     ... {len(discovered)-5} more")
+                else:
+                    print("  (none)")
 
                 print("-" * 50)
                 print("Press 'q' to return to menu")
@@ -855,6 +889,7 @@ class Visionarr:
         finally:
             # Restore terminal settings
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+
 
     def _manual_view_db(self) -> None:
         """View discovered Profile 7 files in database with pagination."""

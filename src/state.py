@@ -81,6 +81,13 @@ class StateDB:
                     scanned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 
+                CREATE TABLE IF NOT EXISTS current_conversion (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    file_path TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                
                 CREATE TABLE IF NOT EXISTS settings (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -91,6 +98,7 @@ class StateDB:
                 CREATE INDEX IF NOT EXISTS idx_discovered_path ON discovered_files(file_path);
                 CREATE INDEX IF NOT EXISTS idx_scanned_path ON scanned_files(file_path);
             """)
+
 
     
     @contextmanager
@@ -495,3 +503,35 @@ class StateDB:
                 "profile_8": profile_8,
                 "no_dovi": total - with_dovi
             }
+
+    # ==================== Current Conversion Methods ====================
+    
+    def set_current_conversion(self, file_path: str, title: str) -> None:
+        """Mark a file as currently being converted."""
+        with self._get_connection() as conn:
+            conn.execute("DELETE FROM current_conversion")
+            conn.execute("""
+                INSERT INTO current_conversion (id, file_path, title, started_at)
+                VALUES (1, ?, ?, CURRENT_TIMESTAMP)
+            """, (file_path, title))
+
+    def clear_current_conversion(self) -> None:
+        """Clear the current conversion marker."""
+        with self._get_connection() as conn:
+            conn.execute("DELETE FROM current_conversion")
+
+    def get_current_conversion(self) -> Optional[dict]:
+        """Get the currently converting file, if any."""
+        with self._get_connection() as conn:
+            row = conn.execute("""
+                SELECT file_path, title, started_at 
+                FROM current_conversion 
+                WHERE id = 1
+            """).fetchone()
+            if row:
+                return {
+                    "file_path": row["file_path"],
+                    "title": row["title"],
+                    "started_at": row["started_at"]
+                }
+            return None

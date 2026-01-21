@@ -330,8 +330,10 @@ class Visionarr:
                 if analysis.needs_conversion:
                     el_type_str = analysis.el_type.value if analysis.el_type else "UNKNOWN"
                     self.state.add_discovered(file_path_str, mkv_file.stem, el_type_str)
-                    if analysis.el_type == ELType.FEL:
-                        logger.info(f"Found Profile 7 FEL (will skip auto): {mkv_file.name}")
+                    if analysis.el_type == ELType.FEL_COMPLEX:
+                        logger.info(f"Found Profile 7 FEL [COMPLEX] (will skip auto): {mkv_file.name}")
+                    elif analysis.el_type == ELType.FEL_SIMPLE:
+                        logger.info(f"Found Profile 7 FEL [SIMPLE] (safe for auto): {mkv_file.name}")
                     else:
                         logger.info(f"Found Profile 7 MEL: {mkv_file.name}")
             except Exception as e:
@@ -365,8 +367,10 @@ class Visionarr:
                     if not self.state.is_discovered(file_path_str) and not self.state.is_processed(file_path_str):
                         el_type_str = analysis.el_type.value if analysis.el_type else "UNKNOWN"
                         self.state.add_discovered(file_path_str, mkv_file.stem, el_type_str)
-                        if analysis.el_type == ELType.FEL:
-                            logger.info(f"Found Profile 7 FEL (will skip auto): {mkv_file.name}")
+                        if analysis.el_type == ELType.FEL_COMPLEX:
+                            logger.info(f"Found Profile 7 FEL [COMPLEX] (will skip auto): {mkv_file.name}")
+                        elif analysis.el_type == ELType.FEL_SIMPLE:
+                            logger.info(f"Found Profile 7 FEL [SIMPLE] (safe for auto): {mkv_file.name}")
                         else:
                             logger.info(f"Found Profile 7 MEL: {mkv_file.name}")
             except Exception as e:
@@ -425,7 +429,6 @@ class Visionarr:
         
         # Process just ONE file, then return to main loop
         # This allows the loop to check running/auto_mode before next file
-        item = mel_files[0]
         file_path = Path(item['file_path'])
         
         if not file_path.exists():
@@ -704,6 +707,30 @@ class Visionarr:
         if only_new:
             print(f"Skipped (already known): {skipped_files}")
         print(f"Profile 7 found: {len(profile7_files)}")
+        if profile7_files:
+            # Get breakdown from state for just this scan
+            mel_count = 0
+            simple_fel = 0
+            complex_fel = 0
+            unknown_el = 0
+            
+            # We can count them by re-scanning the discovered files or just tracking them during scan
+            # Since we just added them to discovered_files, let's just count from our in-memory list if we had one
+            # But we only store Path objects in profile7_files. Let's just do a quick DB check for these paths.
+            for p in profile7_files:
+                res = self.state.get_scanned_file(str(p))
+                if res:
+                    el = res.get('el_type')
+                    if el == 'MEL': mel_count += 1
+                    elif el == 'FEL_SIMPLE': simple_fel += 1
+                    elif el == 'FEL_COMPLEX': complex_fel += 1
+                    else: unknown_el += 1
+            
+            print(f"   • MEL: {mel_count}")
+            print(f"   • Simple FEL (Safe): {simple_fel}")
+            print(f"   • Complex FEL (Unsafe): {complex_fel}")
+            if unknown_el: print(f"   • Unknown EL: {unknown_el}")
+        
         print(f"Errors: {len(errors)}")
         
         # Log to Docker logs
@@ -995,7 +1022,14 @@ class Visionarr:
                 for i in range(start_idx, end_idx):
                     item = filtered[i]
                     el_type = item.get('el_type', 'UNK')
-                    el_tag = f"[{el_type}]" if el_type != 'FEL' else "[FEL ⚠️]"
+                    if el_type == 'FEL_COMPLEX':
+                        el_tag = "[FEL ⚠️]"
+                    elif el_type == 'FEL_SIMPLE':
+                        el_tag = "[FEL ✅]"
+                    elif el_type == 'MEL':
+                        el_tag = "[MEL]"
+                    else:
+                        el_tag = f"[{el_type}]"
                     title = item['title'][:45] + "..." if len(item['title']) > 45 else item['title']
                     print(f"  {i+1}. {el_tag} {title}")
                     print(f"      {item['file_path'][:60]}...")

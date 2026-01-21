@@ -538,6 +538,15 @@ class StateDB:
             ).fetchone()
             return result is not None
 
+    def get_scanned_file(self, file_path: str) -> Optional[dict]:
+        """Get scan details for a specific file."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT has_dovi, dovi_profile, el_type, file_size_bytes, scanned_at FROM scanned_files WHERE file_path = ?",
+                (file_path,)
+            ).fetchone()
+            return dict(row) if row else None
+
     def get_all_scanned_paths(self) -> set:
         """
         Return a set of all scanned file paths for efficient O(1) lookups.

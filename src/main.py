@@ -794,7 +794,12 @@ class Visionarr:
                 for display_num, (orig_idx, item) in enumerate(filtered[start_idx:end_idx], start=start_idx + 1):
                     mark = "[x]" if orig_idx in selected_indices else "[ ]"
                     el_type = item.get('el_type', 'UNK')
-                    el_tag = f"[{el_type}]" if el_type != 'FEL' else "[FEL ⚠️]"
+                    if el_type == 'FEL_COMPLEX':
+                        el_tag = "[FEL ⚠️]"
+                    elif el_type == 'FEL_SIMPLE':
+                        el_tag = "[FEL ✅]"
+                    else:
+                        el_tag = f"[{el_type}]"
                     title = item['title'][:42] + "..." if len(item['title']) > 42 else item['title']
                     print(f"  {mark} {display_num}. {el_tag} {title}")
                 
@@ -1054,7 +1059,12 @@ class Visionarr:
                 backup_status = "YES" if backup_path.exists() else "NO"
                 
                 processed_at = item.processed_at.strftime("%Y-%m-%d %H:%M")
-                el_tag = f"[{item.el_type}]" if item.el_type != 'FEL' else "[FEL ⚠️]"
+                if item.el_type == 'FEL_COMPLEX':
+                    el_tag = "[FEL ⚠️]"
+                elif item.el_type == 'FEL_SIMPLE':
+                    el_tag = "[FEL ✅]"
+                else:
+                    el_tag = f"[{item.el_type}]"
                 print(f"  {i+1}. {el_tag} {title}")
                 print(f"      Profile: {item.original_profile} -> {item.new_profile} | {processed_at} | Backup: {backup_status}")
             

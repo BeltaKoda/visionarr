@@ -29,9 +29,9 @@ class DoViProfile(Enum):
 
 class ELType(Enum):
     """Enhancement Layer types for Profile 7."""
-    MEL = "MEL"                  # Minimal Enhancement Layer - safe
-    FEL_SIMPLE = "FEL"           # Simple FEL - safe (negligible enhancement)
-    FEL_COMPLEX = "FEL_COMPLEX"  # Complex FEL - NOT safe (quality loss)
+    MEL = "MEL"                           # Minimal Enhancement Layer - safe
+    FEL_SIMPLE = "FEL_SIMPLE"             # Simple FEL - safe (negligible enhancement)
+    FEL_COMPLEX = "FEL_COMPLEX"           # Complex FEL - NOT safe (quality loss)
     UNKNOWN = "UNKNOWN"
 
 

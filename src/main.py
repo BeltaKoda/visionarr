@@ -678,8 +678,10 @@ class Visionarr:
                             # Save to DB for Manual Conversion selection with EL type
                             el_type_str = analysis.el_type.value if analysis.el_type else "UNKNOWN"
                             self.state.add_discovered(file_path_str, mkv_file.stem, el_type_str)
-                            if analysis.el_type == ELType.FEL:
+                            if analysis.el_type == ELType.FEL_COMPLEX:
                                 print(f"\n   ⚠️  PROFILE 7 FEL (skip auto): {mkv_file.name}")
+                            elif analysis.el_type == ELType.FEL_SIMPLE:
+                                print(f"\n   ✅ PROFILE 7 FEL (Simple/Safe): {mkv_file.name}")
                             elif analysis.el_type == ELType.MEL:
                                 print(f"\n   ✅ PROFILE 7 MEL: {mkv_file.name}")
                             else:

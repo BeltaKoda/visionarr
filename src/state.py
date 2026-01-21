@@ -466,24 +466,24 @@ class StateDB:
             return [dict(row) for row in rows]
 
     def get_mel_files(self) -> List[dict]:
-        """Get discovered MEL Profile 7 files (safe to auto-convert)."""
+        """Get discovered safe Profile 7 files (MEL or Simple FEL)."""
         with self._get_connection() as conn:
             rows = conn.execute("""
                 SELECT d.id, d.file_path, d.title, d.el_type, d.discovered_at
                 FROM discovered_files d
-                WHERE d.el_type = 'MEL'
+                WHERE d.el_type IN ('MEL', 'FEL_SIMPLE')
                 AND d.file_path NOT IN (SELECT file_path FROM processed_files)
                 ORDER BY d.discovered_at DESC
             """).fetchall()
             return [dict(row) for row in rows]
 
     def get_fel_files(self) -> List[dict]:
-        """Get discovered FEL Profile 7 files (skipped from auto-convert)."""
+        """Get discovered unsafe Profile 7 files (Complex FEL)."""
         with self._get_connection() as conn:
             rows = conn.execute("""
                 SELECT d.id, d.file_path, d.title, d.el_type, d.discovered_at
                 FROM discovered_files d
-                WHERE d.el_type = 'FEL'
+                WHERE d.el_type = 'FEL_COMPLEX'
                 AND d.file_path NOT IN (SELECT file_path FROM processed_files)
                 ORDER BY d.discovered_at DESC
             """).fetchall()

@@ -706,24 +706,278 @@ class Processor:
     # -------------------------------------------------------------------------
     # Conversion
     # -------------------------------------------------------------------------
-    
+
+    def _get_video_info(self, file_path: Path) -> dict:
+        """
+        Extract video track information from MKV file using mkvmerge.
+        
+        Adapted from cryptochrome/dovi_convert.
+        Returns dict with track_id, delay, language, name, or None on error.
+        """
+        try:
+            result = subprocess.run(
+                ["mkvmerge", "-J", str(file_path)],
+                capture_output=True, text=True, timeout=60
+            )
+            if result.returncode != 0:
+                logger.warning(f"mkvmerge -J failed for {file_path.name}")
+                return None
+
+            mkv_json = json.loads(result.stdout)
+
+            # Find first video track
+            for track in mkv_json.get("tracks", []):
+                if track.get("type") == "video":
+                    props = track.get("properties", {})
+                    return {
+                        "track_id": track.get("id"),
+                        "delay": props.get("minimum_timestamp", 0),
+                        "language": props.get("language", "und"),
+                        "name": props.get("track_name", ""),
+                    }
+
+            logger.warning(f"No video track found in {file_path.name}")
+            return None
+
+        except Exception as e:
+            logger.warning(f"Video info extraction failed: {e}")
+            return None
+
+    def _get_fps(self, file_path: Path) -> Optional[str]:
+        """
+        Get video frame rate.
+        
+        Adapted from cryptochrome/dovi_convert.
+        """
+        try:
+            result = subprocess.run(
+                ["mediainfo", "--Output=Video;%FrameRate%", str(file_path)],
+                capture_output=True, text=True, timeout=60
+            )
+            fps = result.stdout.strip()
+            return fps if fps else None
+        except Exception:
+            return None
+
+    def _get_frame_count(self, file_path: Path) -> int:
+        """
+        Get video frame count using mediainfo (fast).
+        
+        Adapted from cryptochrome/dovi_convert.
+        """
+        try:
+            result = subprocess.run(
+                ["mediainfo", "--Output=Video;%FrameCount%", str(file_path)],
+                capture_output=True, text=True, timeout=60
+            )
+            return int(result.stdout.strip()) if result.stdout.strip() else 0
+        except Exception:
+            return 0
+
+    def _get_frame_count_ffprobe(self, file_path: Path) -> int:
+        """
+        Get accurate frame count using ffprobe stream analysis (slow).
+        Used as verification fallback when mediainfo metadata is wrong.
+        
+        Adapted from cryptochrome/dovi_convert.
+        """
+        try:
+            cmd = [
+                "ffprobe", "-v", "error", "-select_streams", "v:0",
+                "-count_packets", "-show_entries", "stream=nb_read_packets",
+                "-of", "default=noprint_wrappers=1:nokey=1", str(file_path)
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+            return int(result.stdout.strip()) if result.stdout.strip() else 0
+        except Exception as e:
+            logger.debug(f"ffprobe frame count failed: {e}")
+            return 0
+
+    def _convert_turbo(self, input_file: Path, output_file: Path) -> Tuple[int, str]:
+        """
+        Pipe-based conversion (fast, no temp video file).
+        
+        Adapted from cryptochrome/dovi_convert.
+        Returns (status, error_type): 0=success, 1=fail, error_type for classification.
+        """
+        logger.info("Using turbo mode (pipe-based conversion)...")
+
+        try:
+            # Create the pipe command: ffmpeg -> dovi_tool
+            ffmpeg_proc = subprocess.Popen(
+                ["ffmpeg", "-y", "-v", "error", "-i", str(input_file),
+                 "-c:v", "copy", "-bsf:v", "hevc_mp4toannexb", "-f", "hevc", "-"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+
+            dovi_cmd = ["dovi_tool", "-m", "2", "convert", "--discard", "-", "-o", str(output_file)]
+
+            dovi_proc = subprocess.Popen(
+                dovi_cmd,
+                stdin=ffmpeg_proc.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+
+            # Allow ffmpeg_proc to receive SIGPIPE
+            ffmpeg_proc.stdout.close()
+
+            _, dovi_stderr = dovi_proc.communicate(timeout=7200)  # 2 hour timeout
+            _, ffmpeg_stderr = ffmpeg_proc.communicate()
+
+            ffmpeg_status = ffmpeg_proc.returncode
+            dovi_status = dovi_proc.returncode
+
+        except subprocess.TimeoutExpired:
+            logger.error("Conversion timed out after 2 hours")
+            return (1, "TIMEOUT")
+        except Exception as e:
+            logger.error(f"Conversion exception: {e}")
+            return (1, "UNKNOWN")
+
+        # Check BOTH return codes
+        if ffmpeg_status != 0:
+            if output_file.exists():
+                output_file.unlink()
+
+            stderr_text = ffmpeg_stderr.decode() if ffmpeg_stderr else ""
+            if any(err in stderr_text for err in ["No space left on device", "Permission denied", "Read-only file system"]):
+                logger.error(f"Critical error: {stderr_text}")
+                return (1, "CRITICAL")
+
+            # Treat any ffmpeg failure as a stream error
+            logger.warning(f"ffmpeg failed: {stderr_text[:200]}")
+            return (1, "STREAM_ERROR")
+
+        if dovi_status == 0:
+            logger.info("Turbo mode conversion successful")
+            return (0, "")
+
+        if output_file.exists():
+            output_file.unlink()
+
+        # Error classification from dovi_tool
+        stderr_text = dovi_stderr.decode() if dovi_stderr else ""
+
+        if any(err in stderr_text for err in ["No space left on device", "Permission denied", "Read-only file system"]):
+            logger.error(f"Critical error: {stderr_text}")
+            return (1, "CRITICAL")
+
+        if any(err in stderr_text for err in ["Invalid data", "Invalid NAL unit", "conversion failed", "Error splitting"]):
+            logger.warning(f"Stream error: {stderr_text[:200]}")
+            return (1, "STREAM_ERROR")
+
+        logger.error(f"Unknown dovi_tool error: {stderr_text[:200]}")
+        return (1, "UNKNOWN")
+
+    def _convert_safe(self, input_file: Path, output_file: Path, video_info: dict) -> int:
+        """
+        Safe mode conversion using disk extraction.
+        Used as fallback for problematic files (Seamless Branching, etc.)
+        
+        Adapted from cryptochrome/dovi_convert.
+        Returns 0=success, 1=fail.
+        """
+        logger.info("Using safe mode (disk extraction)...")
+
+        if not video_info or video_info.get("track_id") is None:
+            logger.error("Cannot use safe mode: no video track info")
+            return 1
+
+        raw_temp = self.temp_dir / f"extract_{input_file.stem}_{os.getpid()}.hevc"
+
+        try:
+            # Step 1: Extract video track to disk
+            logger.info("Extracting video track...")
+            result = subprocess.run(
+                ["mkvextract", str(input_file), "tracks", f"{video_info['track_id']}:{raw_temp}"],
+                capture_output=True, text=True, timeout=3600
+            )
+
+            if result.returncode != 0:
+                logger.error(f"mkvextract failed: {result.stderr[:200]}")
+                return 1
+
+            # Step 2: Convert with dovi_tool
+            logger.info("Converting to Profile 8...")
+            result = subprocess.run(
+                ["dovi_tool", "-m", "2", "convert", "--discard", str(raw_temp), "-o", str(output_file)],
+                capture_output=True, text=True, timeout=3600
+            )
+
+            if result.returncode != 0:
+                logger.error(f"dovi_tool convert failed: {result.stderr[:200]}")
+                return 1
+
+            logger.info("Safe mode conversion successful")
+            return 0
+
+        except subprocess.TimeoutExpired:
+            logger.error("Safe mode conversion timed out")
+            return 1
+        except Exception as e:
+            logger.error(f"Safe mode conversion failed: {e}")
+            return 1
+        finally:
+            # Clean up extracted file
+            if raw_temp.exists():
+                try:
+                    raw_temp.unlink()
+                except OSError:
+                    pass
+
+    def _verify_conversion(self, original_file: Path, converted_file: Path) -> bool:
+        """
+        Verify conversion by comparing frame counts.
+        Uses ffprobe fallback when metadata doesn't match.
+        
+        Adapted from cryptochrome/dovi_convert.
+        """
+        frames_orig = self._get_frame_count(original_file)
+        frames_new = self._get_frame_count(converted_file)
+
+        if frames_orig and frames_orig != frames_new:
+            # Metadata might be wrong - verify with ffprobe
+            logger.warning(f"Frame count mismatch ({frames_orig} vs {frames_new}), verifying with ffprobe...")
+            ff_orig = self._get_frame_count_ffprobe(original_file)
+
+            if ff_orig == frames_new:
+                logger.info("Verification passed (source metadata was incorrect)")
+                return True
+            else:
+                logger.error(f"Frame verification failed: ffprobe={ff_orig} vs new={frames_new}")
+                return False
+        else:
+            logger.info("Verification passed")
+            return True
+
     def convert_to_profile8(self, file_path: Path, force_backup: bool = False) -> Path:
         """
         Convert a Profile 7 MKV to Profile 8.
 
-        Optimized pipeline using dovi_tool's direct MKV input:
-        1. dovi_tool converts directly from MKV → P8 HEVC
-        2. mkvmerge remuxes with original audio/subs
-        3. Atomic swap with backup
+        Uses dovi_convert's pipeline with automatic fallback:
+        1. Try pipe-based turbo mode (fast)
+        2. On stream error, fallback to safe mode (disk extraction)
+        3. Mux with preserved metadata (delay, language, track name)
+        4. Verify frame count before swap
+
+        Adapted from cryptochrome/dovi_convert.
 
         Args:
             file_path: Path to the MKV file to convert
             force_backup: If True, keep backup regardless of backup_enabled setting
-                          (used for Complex FEL safety net)
 
         Returns the path to the converted file.
         """
         logger.info(f"Starting Profile 7 → 8 conversion: {file_path}")
+
+        # Get video info for metadata preservation
+        video_info = self._get_video_info(file_path)
+        fps = self._get_fps(file_path)
+        if not fps:
+            logger.warning("Could not detect frame rate, using default")
+            fps = "23.976"
 
         work_dir = self.temp_dir / f"convert_{file_path.stem}_{os.getpid()}"
         work_dir.mkdir(parents=True, exist_ok=True)
@@ -733,41 +987,61 @@ class Processor:
             output_partial = file_path.with_suffix(".mkv.partial")
             output_backup = file_path.with_suffix(".mkv.original")
 
-            # Step 1: Convert directly from MKV (no ffmpeg extraction needed)
-            logger.info("Step 1/2: Converting to Profile 8...")
-
             # Pre-allocate for Unraid cache safety
             source_size = file_path.stat().st_size
-            # Estimate HEVC size as ~80% of MKV (audio/subs removed)
             estimated_hevc_size = int(source_size * 0.8)
             self._preallocate_file(hevc_p8_path, estimated_hevc_size)
 
-            self._run_command(
-                [
-                    "dovi_tool", "-m", "2",
-                    "convert", "--discard",
-                    "-i", str(file_path),  # Direct MKV input
-                    "-o", str(hevc_p8_path)
-                ],
-                "Profile 7 to 8 conversion"
-            )
+            # Step 1: Convert - try turbo mode first, fallback to safe mode
+            logger.info("Step 1/3: Converting to Profile 8...")
 
-            # Step 2: Remux with original audio/subtitles
-            logger.info("Step 2/2: Remuxing final MKV...")
-            self._run_command(
-                [
-                    "mkvmerge",
-                    "-o", str(output_partial),
-                    str(hevc_p8_path),
-                    "--no-video", str(file_path)
-                ],
-                "MKV remux"
-            )
+            turbo_res, fail_reason = self._convert_turbo(file_path, hevc_p8_path)
+
+            if turbo_res != 0:
+                if fail_reason == "CRITICAL":
+                    raise ProcessorError("Critical error: disk full or permission denied")
+
+                if fail_reason == "STREAM_ERROR":
+                    logger.info("Turbo mode failed (stream error), falling back to safe mode...")
+                    safe_res = self._convert_safe(file_path, hevc_p8_path, video_info)
+                    if safe_res != 0:
+                        raise ProcessorError("Both turbo and safe mode conversion failed")
+                else:
+                    raise ProcessorError(f"Conversion failed: {fail_reason}")
+
+            # Step 2: Remux with original audio/subtitles and preserved metadata
+            logger.info("Step 2/3: Remuxing final MKV...")
+
+            mux_args = ["-o", str(output_partial)]
+
+            # Preserve video delay if present
+            if video_info and video_info.get("delay", 0) != 0:
+                mux_args.extend(["--sync", f"0:{video_info['delay']}"])
+
+            # Set frame rate
+            mux_args.extend(["--default-duration", f"0:{fps}fps"])
+
+            # Preserve language
+            lang = video_info.get("language", "und") if video_info else "und"
+            mux_args.extend(["--language", f"0:{lang}"])
+
+            # Preserve track name
+            if video_info and video_info.get("name"):
+                mux_args.extend(["--track-name", f"0:{video_info['name']}"])
+
+            mux_args.append(str(hevc_p8_path))
+            mux_args.extend(["--no-video", str(file_path)])
+
+            self._run_command(["mkvmerge"] + mux_args, "MKV remux")
+
+            # Step 3: Verify conversion
+            logger.info("Step 3/3: Verifying conversion...")
+            if not self._verify_conversion(file_path, output_partial):
+                raise ProcessorError("Frame count verification failed")
 
             # Atomic swap
             logger.info("Performing atomic file swap...")
 
-            # Keep backup if globally enabled OR if force_backup is set (Complex FEL safety)
             should_backup = self.backup_enabled or force_backup
             if should_backup:
                 shutil.move(str(file_path), str(output_backup))
@@ -788,7 +1062,7 @@ class Processor:
             if output_partial.exists():
                 output_partial.unlink()
             raise
-            
+
         finally:
             # Clean up work directory
             if work_dir.exists():

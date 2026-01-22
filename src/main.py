@@ -1197,7 +1197,7 @@ class Visionarr:
             print(f"  4. Full Scan Day: {full_day}")
             print(f"  5. Full Scan Time: {full_time}")
             print(f"  6. Convert Unsafe (Complex FEL): {fel_status}")
-            print(f"  7. Backup Unsafe Files: {backup_fel_status}")
+            print(f"  7. Backup Unsafe Conversions: {backup_fel_status}")
             print("  8. ← Back")
             print("=" * 50)
             print("\nPress a number to select:")
@@ -1241,23 +1241,33 @@ class Visionarr:
                 except ValueError:
                     print("Invalid format. Use HH:MM")
             elif choice == "6":
-                new_val = "false" if fel_auto else "true"
-                self.state.set_setting("auto_process_fel", new_val)
-                print("\n" + "=" * 50)
-                if new_val == "true":
-                    print("⚠️  UNSAFE FILE CONVERSION: ENABLED")
+                if not fel_auto:
+                    # User wants to ENABLE - show confirmation
+                    print("\n" + "=" * 50)
+                    print("⚠️  ENABLE UNSAFE FILE CONVERSION?")
                     print("=" * 50)
-                    print("Complex FEL files will now be auto-converted.")
                     print("")
-                    print("These files use advanced Dolby Vision enhancement")
-                    print("layers that may result in quality loss when")
-                    print("converted to Profile 8.")
+                    print("Complex FEL files use advanced Dolby Vision")
+                    print("enhancement layers. Converting these to Profile 8")
+                    print("may result in NOTICEABLE PICTURE QUALITY LOSS:")
+                    print("")
+                    print("  • Darker shadows or crushed blacks")
+                    print("  • Less vibrant highlights")
+                    print("  • Reduced HDR dynamic range")
+                    print("")
+                    print("We recommend keeping 'Backup Unsafe Conversions'")
+                    print("enabled so you can compare and restore if needed.")
+                    print("")
+                    if _confirm("Enable unsafe conversions? (y/n): "):
+                        self.state.set_setting("auto_process_fel", "true")
+                        print("\n⚠️  Unsafe file conversion ENABLED")
+                    else:
+                        print("\nCancelled - unsafe files will still be skipped.")
                 else:
-                    print("✅ UNSAFE FILE CONVERSION: DISABLED")
-                    print("=" * 50)
-                    print("Complex FEL files will be skipped during")
-                    print("automatic processing. You can still convert")
-                    print("them manually via the Manual Conversion menu.")
+                    # User wants to DISABLE - no confirmation needed
+                    self.state.set_setting("auto_process_fel", "false")
+                    print("\n✅ Unsafe file conversion DISABLED")
+                    print("   Complex FEL files will be skipped during auto-processing.")
                 input("\nPress Enter to continue...")
 
             elif choice == "7":

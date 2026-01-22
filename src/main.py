@@ -626,6 +626,9 @@ class Visionarr:
         skipped_files = 0
         analyzed_files = 0
         profile7_files = []
+        mel_count = 0
+        simple_fel_count = 0
+        complex_fel_count = 0
         errors = []
         stopped = False
         
@@ -658,7 +661,8 @@ class Visionarr:
                     
                     # Progress indication for files being analyzed
                     analyzed_files += 1
-                    print(f"   [{analyzed_files} analyzed | {len(profile7_files)} Profile 7] {mkv_file.name[:40]}...", end="\r")
+                    p7_breakdown = f"{mel_count}M/{simple_fel_count}S/{complex_fel_count}C" if len(profile7_files) > 0 else "0"
+                    print(f"   [{analyzed_files} analyzed | {len(profile7_files)} P7 ({p7_breakdown})] {mkv_file.name[:35]}...", end="\r")
 
                     try:
                         analysis = self.processor.analyze_file(mkv_file)
@@ -682,10 +686,13 @@ class Visionarr:
                             el_type_str = analysis.el_type.value if analysis.el_type else "UNKNOWN"
                             self.state.add_discovered(file_path_str, mkv_file.stem, el_type_str)
                             if analysis.el_type == ELType.FEL_COMPLEX:
+                                complex_fel_count += 1
                                 print(f"\n   ⚠️  PROFILE 7 FEL (skip auto): {mkv_file.name}")
                             elif analysis.el_type == ELType.FEL_SIMPLE:
+                                simple_fel_count += 1
                                 print(f"\n   ✅ PROFILE 7 FEL (Simple/Safe): {mkv_file.name}")
                             elif analysis.el_type == ELType.MEL:
+                                mel_count += 1
                                 print(f"\n   ✅ PROFILE 7 MEL: {mkv_file.name}")
                             else:
                                 print(f"\n   ❔ PROFILE 7 UNKNOWN (EL detection failed): {mkv_file.name}")
@@ -708,33 +715,17 @@ class Visionarr:
             print(f"Skipped (already known): {skipped_files}")
         print(f"Profile 7 found: {len(profile7_files)}")
         if profile7_files:
-            # Get breakdown from state for just this scan
-            mel_count = 0
-            simple_fel = 0
-            complex_fel = 0
-            unknown_el = 0
-            
-            # We can count them by re-scanning the discovered files or just tracking them during scan
-            # Since we just added them to discovered_files, let's just count from our in-memory list if we had one
-            # But we only store Path objects in profile7_files. Let's just do a quick DB check for these paths.
-            for p in profile7_files:
-                res = self.state.get_scanned_file(str(p))
-                if res:
-                    el = res.get('el_type')
-                    if el == 'MEL': mel_count += 1
-                    elif el == 'FEL_SIMPLE': simple_fel += 1
-                    elif el == 'FEL_COMPLEX': complex_fel += 1
-                    else: unknown_el += 1
-            
+            # Use in-memory counters from the scan
             print(f"   • MEL: {mel_count}")
-            print(f"   • Simple FEL (Safe): {simple_fel}")
-            print(f"   • Complex FEL (Unsafe): {complex_fel}")
-            if unknown_el: print(f"   • Unknown EL: {unknown_el}")
+            print(f"   • Simple FEL (Safe): {simple_fel_count}")
+            print(f"   • Complex FEL (Unsafe): {complex_fel_count}")
+            unknown_el = len(profile7_files) - (mel_count + simple_fel_count + complex_fel_count)
+            if unknown_el > 0: print(f"   • Unknown EL: {unknown_el}")
         
         print(f"Errors: {len(errors)}")
         
         # Log to Docker logs
-        logger.info(f"Scan complete: {total_files} scanned, {len(profile7_files)} Profile 7 found")
+        logger.info(f"Scan complete: {total_files} scanned, {len(profile7_files)} Profile 7 found ({mel_count} MEL, {simple_fel_count} Simple FEL, {complex_fel_count} Complex FEL)")
         
         if profile7_files:
             print("\n📋 Profile 7 files found:")

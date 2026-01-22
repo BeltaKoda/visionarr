@@ -615,7 +615,7 @@ class Processor:
     # Conversion
     # -------------------------------------------------------------------------
     
-    def convert_to_profile8(self, file_path: Path) -> Path:
+    def convert_to_profile8(self, file_path: Path, force_backup: bool = False) -> Path:
         """
         Convert a Profile 7 MKV to Profile 8.
 
@@ -623,6 +623,11 @@ class Processor:
         1. dovi_tool converts directly from MKV → P8 HEVC
         2. mkvmerge remuxes with original audio/subs
         3. Atomic swap with backup
+
+        Args:
+            file_path: Path to the MKV file to convert
+            force_backup: If True, keep backup regardless of backup_enabled setting
+                          (used for Complex FEL safety net)
 
         Returns the path to the converted file.
         """
@@ -670,9 +675,14 @@ class Processor:
             # Atomic swap
             logger.info("Performing atomic file swap...")
 
-            if self.backup_enabled:
+            # Keep backup if globally enabled OR if force_backup is set (Complex FEL safety)
+            should_backup = self.backup_enabled or force_backup
+            if should_backup:
                 shutil.move(str(file_path), str(output_backup))
-                logger.info(f"Original backed up to: {output_backup}")
+                if force_backup and not self.backup_enabled:
+                    logger.info(f"Original backed up (Complex FEL safety): {output_backup}")
+                else:
+                    logger.info(f"Original backed up to: {output_backup}")
             else:
                 file_path.unlink()
 

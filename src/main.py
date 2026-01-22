@@ -134,9 +134,17 @@ class Visionarr:
             if not self.processor.check_disk_space(file_path):
                 raise Exception("Insufficient disk space for conversion")
             
+            # Determine if we should force backup for Complex FEL
+            force_backup = False
+            if analysis.el_type == ELType.FEL_COMPLEX:
+                backup_complex_fel = self.state.get_setting("backup_complex_fel") == "true"
+                if backup_complex_fel:
+                    force_backup = True
+                    logger.info(f"Complex FEL detected - backup will be kept as safety net")
+            
             # Perform conversion
             logger.info(f"Profile 7 detected, converting: {title}")
-            self.processor.convert_to_profile8(file_path)
+            self.processor.convert_to_profile8(file_path, force_backup=force_backup)
             
             # Mark as processed
             el_type_str = analysis.el_type.value if analysis.el_type else "UNKNOWN"
@@ -1177,6 +1185,8 @@ class Visionarr:
             full_time = settings.get("full_scan_time", "03:00")
             fel_auto = settings.get("auto_process_fel", "false") == "true"
             fel_status = "ON ⚠️" if fel_auto else "OFF (Skip Unsafe)"
+            backup_fel = settings.get("backup_complex_fel", "true") == "true"
+            backup_fel_status = "ON (Recommended)" if backup_fel else "OFF"
             
             print("\n" + "=" * 50)
             print("           SETTINGS           ")
@@ -1187,7 +1197,8 @@ class Visionarr:
             print(f"  4. Full Scan Day: {full_day}")
             print(f"  5. Full Scan Time: {full_time}")
             print(f"  6. Convert Unsafe (Complex FEL): {fel_status}")
-            print("  7. ← Back")
+            print(f"  7. Backup Unsafe Files: {backup_fel_status}")
+            print("  8. ← Back")
             print("=" * 50)
             print("\nPress a number to select:")
             
@@ -1250,6 +1261,27 @@ class Visionarr:
                 input("\nPress Enter to continue...")
 
             elif choice == "7":
+                new_val = "false" if backup_fel else "true"
+                self.state.set_setting("backup_complex_fel", new_val)
+                print("\n" + "=" * 50)
+                if new_val == "true":
+                    print("✅ BACKUP UNSAFE FILES: ENABLED")
+                    print("=" * 50)
+                    print("When converting Complex FEL (unsafe) files,")
+                    print("the original will be kept as a backup even if")
+                    print("global backups are disabled.")
+                    print("")
+                    print("This lets you compare quality and restore if needed.")
+                else:
+                    print("⚠️  BACKUP UNSAFE FILES: DISABLED")
+                    print("=" * 50)
+                    print("Complex FEL files will NOT be backed up unless")
+                    print("global 'Backup Originals' is enabled.")
+                    print("")
+                    print("⚠️  You may lose the original if quality is worse!")
+                input("\nPress Enter to continue...")
+
+            elif choice == "8":
                 break
     
     def _change_auto_process_mode(self) -> None:

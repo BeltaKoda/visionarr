@@ -150,187 +150,279 @@ class Processor:
             # fallocate not available on this system
             logger.debug("fallocate not available, skipping pre-allocation")
 
-    def _pq_to_nits(self, pq_value: float) -> float:
-        """Convert PQ (ST.2084) value to nits."""
-        m1 = 0.1593017578125
-        m2 = 78.84375
-        c1 = 0.8359375
-        c2 = 18.8515625
-        c3 = 18.6875
+    def _pq_to_nits(self, code_val: int) -> int:
+        """
+        Convert PQ code value (0-4095) to nits using ST.2084 EOTF.
+        
+        Adapted from cryptochrome/dovi_convert.
+        """
+        if code_val <= 0:
+            return 0
 
-        if pq_value <= 0:
-            return 0.0
+        # ST.2084 Constants
+        m1 = 2610.0 / 16384.0
+        m2 = 2523.0 / 32.0
+        c1 = 3424.0 / 4096.0
+        c2 = 2413.0 / 128.0
+        c3 = 2392.0 / 128.0
 
-        pq_pow = pow(pq_value, 1.0 / m2)
-        num = max(pq_pow - c1, 0.0)
-        den = c2 - c3 * pq_pow
+        # Normalize 12-bit code value (0-4095) to 0-1
+        V = code_val / 4095.0
 
-        if den <= 0:
-            return 10000.0
+        if V <= 0:
+            return 0
 
-        linear = pow(num / den, 1.0 / m1)
-        return linear * 10000.0
+        try:
+            import math
+            # Calculate V^(1/m2)
+            vp = math.pow(V, 1.0 / m2)
 
-    def _get_bl_peak_nits(self, file_path: Path) -> float:
-        """Get base layer peak brightness (MaxCLL) from MediaInfo."""
+            # Calculate max(vp - c1, 0)
+            num = max(vp - c1, 0)
+
+            # Calculate c2 - c3*vp
+            den = c2 - c3 * vp
+            if den == 0:
+                den = 0.000001
+
+            # Calculate R = (num / den)^(1/m1)
+            base_val = max(num / den, 0)
+
+            nits = 10000.0 * math.pow(base_val, 1.0 / m1)
+            return int(round(nits))
+        except (ValueError, OverflowError):
+            return 0
+
+    def _get_bl_peak_nits(self, file_path: Path) -> Tuple[int, bool]:
+        """
+        Get base layer peak brightness (MaxCLL) in nits.
+        
+        Adapted from cryptochrome/dovi_convert.
+        Returns (value, is_default) tuple for transparency.
+        """
         try:
             result = subprocess.run(
-                ["mediainfo", "--Output=JSON", str(file_path)],
+                ["mediainfo", "--Output=Video;%MaxCLL%", str(file_path)],
                 capture_output=True, text=True, timeout=60
             )
-            info = json.loads(result.stdout)
-
-            for track in info.get("media", {}).get("track", []):
-                if track.get("@type") == "Video":
-                    maxcll = track.get("MaxCLL", "")
-                    if maxcll:
-                        match = re.search(r"(\d+)", str(maxcll))
-                        if match:
-                            return float(match.group(1))
-
-                    luminance = track.get("MasteringDisplay_Luminance", "")
-                    if "max" in luminance.lower():
-                        match = re.search(r"max:\s*(\d+)", luminance.lower())
-                        if match:
-                            return float(match.group(1))
+            maxcll_str = result.stdout.strip()
+            if maxcll_str and maxcll_str.isdigit():
+                maxcll = int(maxcll_str)
+                if maxcll >= 100:  # Sanity check
+                    return (maxcll, False)
         except Exception as e:
             logger.debug(f"Could not get MaxCLL: {e}")
 
-        return 1000.0  # Default
+        return (1000, True)  # Default when MaxCLL unavailable
 
-    def _check_fel_complexity(self, file_path: Path, threshold_nits: float = 50.0) -> bool:
+    def _get_duration_ms(self, file_path: Path) -> int:
         """
-        Comprehensive FEL complexity check.
+        Get video duration in milliseconds.
+        
+        Adapted from cryptochrome/dovi_convert.
+        """
+        try:
+            result = subprocess.run(
+                ["mediainfo", "--Output=Video;%Duration%", str(file_path)],
+                capture_output=True, text=True, timeout=60
+            )
+            dur_str = result.stdout.strip().split(".")[0]
+            return int(dur_str) if dur_str else 0
+        except Exception:
+            return 0
 
-        Checks 3 indicators at 10 sample points:
-        1. L1 brightness expansion (max_pq > BL peak + threshold)
-        2. Active mapping coefficients (non-zero polynomial/MMR)
-        3. NLQ offsets (non-zero enhancement processing)
+    def _extract_l1_max(self, json_content: str) -> Optional[int]:
+        """
+        Extract max L1 value from RPU JSON.
+        
+        Adapted from cryptochrome/dovi_convert.
+        """
+        try:
+            data = json.loads(json_content)
+            max_vals = []
 
+            def find_l1(obj):
+                if isinstance(obj, dict):
+                    # Look for Level1 or l1 keys
+                    for key in ["Level1", "l1", "L1"]:
+                        if key in obj:
+                            l1_data = obj[key]
+                            if isinstance(l1_data, dict):
+                                for mkey in ["max_pq", "max", "Max"]:
+                                    if mkey in l1_data:
+                                        val = l1_data[mkey]
+                                        if isinstance(val, (int, float)):
+                                            max_vals.append(int(val))
+                    for v in obj.values():
+                        find_l1(v)
+                elif isinstance(obj, list):
+                    for item in obj:
+                        find_l1(item)
+
+            find_l1(data)
+            return max(max_vals) if max_vals else None
+        except Exception:
+            return None
+
+    def _check_fel_complexity(self, file_path: Path) -> bool:
+        """
+        Analyze RPU to detect Complex FEL.
+        
+        Adapted from cryptochrome/dovi_convert.
+        
+        Checks L1 brightness expansion at 10 sample points.
         Returns True if complex (unsafe), False if simple (safe).
         """
         import uuid
+        import time
+        import os
 
-        bl_peak = self._get_bl_peak_nits(file_path)
-        logger.debug(f"Base layer peak: {bl_peak} nits")
+        # 1. Determine probe points
+        duration_ms = self._get_duration_ms(file_path)
 
-        # Get duration
-        try:
-            result = subprocess.run(
-                ["mediainfo", "--Output=JSON", str(file_path)],
-                capture_output=True, text=True, timeout=60
-            )
-            info = json.loads(result.stdout)
-            duration = 0.0
-            for track in info.get("media", {}).get("track", []):
-                if track.get("@type") == "Video":
-                    duration = float(track.get("Duration", 0))
-                    break
-            if duration <= 0:
-                logger.warning("Could not get duration, assuming complex FEL")
-                return True
-        except Exception:
-            return True
+        if duration_ms < 10000:
+            timestamps = [0]
+        else:
+            dur_sec = duration_ms // 1000
+            # Probe at 10 points (5% to 95%)
+            timestamps = [
+                int(dur_sec * 0.05), int(dur_sec * 0.15), int(dur_sec * 0.25),
+                int(dur_sec * 0.35), int(dur_sec * 0.45), int(dur_sec * 0.55),
+                int(dur_sec * 0.65), int(dur_sec * 0.75), int(dur_sec * 0.85),
+                int(dur_sec * 0.95)
+            ]
 
-        # Sample at 10 points
-        sample_points = [duration * (0.05 + 0.1 * i) for i in range(10)]
-        brightness_issues = 0
-        mapping_issues = 0
-        nlq_issues = 0
-        valid_samples = 0
+        # 2. Get base layer peak
+        bl_peak, is_default = self._get_bl_peak_nits(file_path)
+        threshold = bl_peak + 50
 
-        for timestamp in sample_points:
+        logger.debug(f"Base layer peak: {bl_peak} nits (default={is_default}), threshold: {threshold}")
+
+        complex_signal = False
+        probe_count = 0
+
+        for t in timestamps:
+            # Create temp files
+            temp_hevc = self.temp_dir / f"probe_{t}_{int(time.time())}_{os.getpid()}.hevc"
+            temp_rpu = temp_hevc.with_suffix(".rpu")
+            temp_json = temp_hevc.with_suffix(".json")
+
             try:
-                rpu_path = self.temp_dir / f"rpu_check_{uuid.uuid4().hex}.bin"
-                json_path = self.temp_dir / f"rpu_check_{uuid.uuid4().hex}.json"
+                # Extract 1 second of HEVC
+                ffmpeg_cmd = [
+                    "ffmpeg", "-y", "-v", "error",
+                    "-analyzeduration", "100M", "-probesize", "100M",
+                    "-ss", str(t), "-i", str(file_path),
+                    "-map", "0:v:0", "-c:v", "copy", "-an", "-sn", "-dn",
+                    "-bsf:v", "hevc_mp4toannexb", "-f", "hevc", "-t", "1",
+                    str(temp_hevc)
+                ]
 
                 try:
-                    # Extract single frame RPU
-                    ffmpeg_cmd = [
-                        "ffmpeg", "-v", "error", "-y",
-                        "-ss", str(timestamp),
-                        "-i", str(file_path),
-                        "-c:v", "copy",
-                        "-bsf:v", "hevc_mp4toannexb",
-                        "-f", "hevc",
-                        "-frames:v", "1",
-                        "-"
-                    ]
-                    dovi_cmd = ["dovi_tool", "extract-rpu", "-", "-o", str(rpu_path)]
-
-                    ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    dovi_proc = subprocess.Popen(dovi_cmd, stdin=ffmpeg_proc.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    ffmpeg_proc.stdout.close()
-                    dovi_proc.communicate(timeout=30)
-
-                    if dovi_proc.returncode != 0 or not rpu_path.exists():
-                        continue
-
                     subprocess.run(
-                        ["dovi_tool", "export", "-i", str(rpu_path), "-d", f"all={json_path}"],
-                        capture_output=True, timeout=30
+                        ffmpeg_cmd,
+                        capture_output=True,
+                        stdin=subprocess.DEVNULL,
+                        timeout=60
                     )
+                except Exception as e:
+                    logger.debug(f"probe ffmpeg exception @ {t}s: {e}")
+                    continue
 
-                    if not json_path.exists():
-                        continue
+                if not temp_hevc.exists() or temp_hevc.stat().st_size == 0:
+                    continue
 
-                    with open(json_path, 'r') as f:
-                        content = f.read()
+                # Extract RPU
+                try:
+                    subprocess.run(
+                        ["dovi_tool", "extract-rpu", str(temp_hevc), "-o", str(temp_rpu)],
+                        capture_output=True,
+                        timeout=60
+                    )
+                except Exception as e:
+                    logger.debug(f"probe dovi_tool extract-rpu exception: {e}")
 
-                    valid_samples += 1
+                # Clean up HEVC immediately
+                if temp_hevc.exists():
+                    temp_hevc.unlink()
 
-                    # Check 1: L1 brightness expansion
-                    max_pq_match = re.search(r'"max_pq"\s*:\s*(\d+)', content)
-                    if max_pq_match:
-                        max_pq = int(max_pq_match.group(1)) / 4095.0
-                        l1_nits = self._pq_to_nits(max_pq)
-                        if l1_nits > bl_peak + threshold_nits:
-                            brightness_issues += 1
+                if not temp_rpu.exists() or temp_rpu.stat().st_size == 0:
+                    continue
 
-                    # Check 2: Active mapping coefficients
-                    # Look for non-zero polynomial or MMR data
-                    if re.search(r'"mapping_idc"\s*:\s*[01]', content):
-                        # Check for non-trivial coefficients
-                        coef_match = re.search(r'"poly_coef[^"]*"\s*:\s*\[\s*([^\]]+)\]', content)
-                        if coef_match:
-                            coefs = coef_match.group(1)
-                            # If any coefficient > small threshold, mapping is active
-                            if re.search(r'[1-9]\d*', coefs):
-                                mapping_issues += 1
+                # Export to JSON
+                try:
+                    subprocess.run(
+                        ["dovi_tool", "export", "-i", str(temp_rpu), "-d", f"all={temp_json}"],
+                        capture_output=True,
+                        timeout=60
+                    )
+                except Exception as e:
+                    logger.debug(f"probe dovi_tool export exception: {e}")
 
-                    # Check 3: NLQ offsets
-                    nlq_offset_match = re.search(r'"nlq_offset"\s*:\s*(\d+)', content)
-                    if nlq_offset_match:
-                        offset = int(nlq_offset_match.group(1))
-                        if offset > 0:
-                            nlq_issues += 1
+                # Clean up RPU immediately
+                if temp_rpu.exists():
+                    temp_rpu.unlink()
 
-                finally:
-                    for p in [rpu_path, json_path]:
-                        if p.exists():
-                            try:
-                                p.unlink()
-                            except OSError:
-                                pass
+                if not temp_json.exists() or temp_json.stat().st_size == 0:
+                    if temp_json.exists():
+                        temp_json.unlink()
+                    continue
 
-            except Exception as e:
-                logger.debug(f"Sample at {timestamp:.1f}s failed: {e}")
-                continue
+                probe_count += 1
 
-        # Need at least 50% valid samples
-        if valid_samples < 5:
-            logger.warning(f"Insufficient samples ({valid_samples}/10), assuming complex")
+                # Check for MEL - early return if found
+                try:
+                    json_content = temp_json.read_text()
+                    if '"el_type":"MEL"' in json_content or '"el_type": "MEL"' in json_content:
+                        logger.info("Minimal Enhancement Layer (MEL) detected - safe to convert")
+                        if temp_json.exists():
+                            temp_json.unlink()
+                        return False  # MEL is always safe
+
+                    # Extract L1 max
+                    l1_max = self._extract_l1_max(json_content)
+
+                    if l1_max is not None:
+                        l1_nits = self._pq_to_nits(l1_max)
+                        logger.debug(f"Probe @ {t}s: L1={l1_max} -> {l1_nits} nits vs threshold={threshold}")
+
+                        if l1_nits > threshold:
+                            complex_signal = True
+                            logger.info(f"Active reconstruction detected (L1: {l1_nits} nits > BL: {bl_peak} nits @ {t}s)")
+                            if temp_json.exists():
+                                temp_json.unlink()
+                            break
+
+                except Exception as e:
+                    logger.debug(f"Probe @ {t}s: Error parsing JSON: {e}")
+
+                if temp_json.exists():
+                    temp_json.unlink()
+
+            finally:
+                # Final cleanup for any remaining files
+                for p in [temp_hevc, temp_rpu, temp_json]:
+                    if p.exists():
+                        try:
+                            p.unlink()
+                        except OSError:
+                            pass
+
+        if probe_count == 0:
+            logger.warning("Extraction failed (no probes succeeded), assuming complex")
+            return True  # Default to Complex if we can't read it
+
+        # Require at least 50% of probes to succeed for reliable verdict
+        min_required = max(1, len(timestamps) // 2)
+        if not complex_signal and probe_count < min_required:
+            logger.warning(f"Insufficient data ({probe_count}/{len(timestamps)} probes succeeded), assuming complex")
+            return True  # Default to Complex if data is unreliable
+
+        if complex_signal:
             return True
-
-        # Log findings
-        if brightness_issues or mapping_issues or nlq_issues:
-            logger.info(
-                f"FEL complexity: brightness={brightness_issues}, "
-                f"mapping={mapping_issues}, nlq={nlq_issues} issues in {valid_samples} samples"
-            )
-            return True
-
-        return False
+        else:
+            logger.info("Static / Simple FEL detected - safe to convert")
+            return False
 
     # -------------------------------------------------------------------------
     # Detection

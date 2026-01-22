@@ -94,6 +94,11 @@ See [.env.example](.env.example) for all available options.
 | `BACKUP_ENABLED` | true | Keep .original backup files |
 | `AUTO_PROCESS_FEL` | false | Auto-convert FEL files (Lossy) |
 
+## Acknowledgments
+
+FEL complexity detection logic adapted from [dovi_convert](https://github.com/cryptochrome/dovi_convert) by cryptochrome.
+
 ## License
 
 MIT
+

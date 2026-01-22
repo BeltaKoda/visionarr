@@ -16,6 +16,12 @@
   <a href="#features">Features</a>
 </p>
 
+<p align="center">
+  <em>Built on the shoulders of giants</em><br>
+  Core conversion logic adapted from <a href="https://github.com/cryptochrome/dovi_convert"><strong>dovi_convert</strong></a> by <strong>cryptochrome</strong>.<br>
+  Huge thanks for pioneering the FEL detection and Profile 7→8 conversion pipeline.
+</p>
+
 ---
 
 ## Why?

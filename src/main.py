@@ -626,9 +626,8 @@ class Visionarr:
         skipped_files = 0
         analyzed_files = 0
         profile7_files = []
-        mel_count = 0
-        simple_fel_count = 0
-        complex_fel_count = 0
+        safe_count = 0      # MEL + Simple FEL
+        unsafe_count = 0    # Complex FEL
         errors = []
         stopped = False
         
@@ -661,8 +660,10 @@ class Visionarr:
                     
                     # Progress indication for files being analyzed
                     analyzed_files += 1
-                    p7_breakdown = f"{mel_count}M/{simple_fel_count}S/{complex_fel_count}C" if len(profile7_files) > 0 else "0"
-                    print(f"   [{analyzed_files} analyzed | {len(profile7_files)} P7 ({p7_breakdown})] {mkv_file.name[:35]}...", end="\r")
+                    if len(profile7_files) > 0:
+                        print(f"   [{analyzed_files} analyzed | {len(profile7_files)} P7: {safe_count} safe, {unsafe_count} unsafe] {mkv_file.name[:30]}...", end="\r")
+                    else:
+                        print(f"   [{analyzed_files} analyzed] {mkv_file.name[:45]}...", end="\r")
 
                     try:
                         analysis = self.processor.analyze_file(mkv_file)
@@ -686,16 +687,14 @@ class Visionarr:
                             el_type_str = analysis.el_type.value if analysis.el_type else "UNKNOWN"
                             self.state.add_discovered(file_path_str, mkv_file.stem, el_type_str)
                             if analysis.el_type == ELType.FEL_COMPLEX:
-                                complex_fel_count += 1
-                                print(f"\n   ⚠️  PROFILE 7 FEL (skip auto): {mkv_file.name}")
-                            elif analysis.el_type == ELType.FEL_SIMPLE:
-                                simple_fel_count += 1
-                                print(f"\n   ✅ PROFILE 7 FEL (Simple/Safe): {mkv_file.name}")
-                            elif analysis.el_type == ELType.MEL:
-                                mel_count += 1
-                                print(f"\n   ✅ PROFILE 7 MEL: {mkv_file.name}")
+                                unsafe_count += 1
+                                print(f"\n   ⚠️  PROFILE 7 [UNSAFE]: {mkv_file.name}")
+                                print(f"       Complex FEL detected - may lose quality if converted")
+                            elif analysis.el_type in (ELType.FEL_SIMPLE, ELType.MEL):
+                                safe_count += 1
+                                print(f"\n   ✅ PROFILE 7 [SAFE]: {mkv_file.name}")
                             else:
-                                print(f"\n   ❔ PROFILE 7 UNKNOWN (EL detection failed): {mkv_file.name}")
+                                print(f"\n   ❔ PROFILE 7 [UNKNOWN]: {mkv_file.name}")
                     except PermissionError:
                         errors.append(f"Permission denied: {mkv_file}")
                     except Exception as e:
@@ -716,16 +715,18 @@ class Visionarr:
         print(f"Profile 7 found: {len(profile7_files)}")
         if profile7_files:
             # Use in-memory counters from the scan
-            print(f"   • MEL: {mel_count}")
-            print(f"   • Simple FEL (Safe): {simple_fel_count}")
-            print(f"   • Complex FEL (Unsafe): {complex_fel_count}")
-            unknown_el = len(profile7_files) - (mel_count + simple_fel_count + complex_fel_count)
-            if unknown_el > 0: print(f"   • Unknown EL: {unknown_el}")
+            print(f"   ✅ Safe to convert: {safe_count}")
+            print(f"   ⚠️  Unsafe (Complex FEL): {unsafe_count}")
+            unknown_el = len(profile7_files) - (safe_count + unsafe_count)
+            if unknown_el > 0: print(f"   ❔ Unknown: {unknown_el}")
+            if unsafe_count > 0:
+                print(f"\n   💡 Unsafe files are skipped by default.")
+                print(f"      To enable, go to Settings → Convert Complex FEL")
         
         print(f"Errors: {len(errors)}")
         
         # Log to Docker logs
-        logger.info(f"Scan complete: {total_files} scanned, {len(profile7_files)} Profile 7 found ({mel_count} MEL, {simple_fel_count} Simple FEL, {complex_fel_count} Complex FEL)")
+        logger.info(f"Scan complete: {total_files} scanned, {len(profile7_files)} Profile 7 found ({safe_count} safe, {unsafe_count} unsafe)")
         
         if profile7_files:
             print("\n📋 Profile 7 files found:")
@@ -815,18 +816,18 @@ class Visionarr:
                     mark = "[x]" if orig_idx in selected_indices else "[ ]"
                     el_type = item.get('el_type', 'UNK')
                     if el_type == 'FEL_COMPLEX':
-                        el_tag = "[FEL ⚠️]"
-                    elif el_type == 'FEL_SIMPLE':
-                        el_tag = "[FEL ✅]"
+                        el_tag = "[⚠️ UNSAFE]"
+                    elif el_type in ('FEL_SIMPLE', 'MEL'):
+                        el_tag = "[✅ SAFE]"
                     else:
-                        el_tag = f"[{el_type}]"
-                    title = item['title'][:42] + "..." if len(item['title']) > 42 else item['title']
+                        el_tag = "[❔]"
+                    title = item['title'][:40] + "..." if len(item['title']) > 40 else item['title']
                     print(f"  {mark} {display_num}. {el_tag} {title}")
                 
                 print("-" * 55)
                 print(f"Selected: {len(selected_indices)} file(s)")
-                print("💡 FEL = Full Enhancement Layer (lossy conversion)")
-                print("   MEL = Minimal Enhancement Layer (safe conversion)")
+                print("💡 SAFE = Will convert without quality loss")
+                print("   UNSAFE = Complex FEL - may lose quality")
                 filter_hint = f" | filter:'{search_term}'" if search_term else ""
                 print(f"[1-{len(filtered)}]=toggle, n/p=page, s=search, d=done, q=quit{filter_hint}")
                 
@@ -1014,14 +1015,12 @@ class Visionarr:
                     item = filtered[i]
                     el_type = item.get('el_type', 'UNK')
                     if el_type == 'FEL_COMPLEX':
-                        el_tag = "[FEL ⚠️]"
-                    elif el_type == 'FEL_SIMPLE':
-                        el_tag = "[FEL ✅]"
-                    elif el_type == 'MEL':
-                        el_tag = "[MEL]"
+                        el_tag = "[⚠️ UNSAFE]"
+                    elif el_type in ('FEL_SIMPLE', 'MEL'):
+                        el_tag = "[✅ SAFE]"
                     else:
-                        el_tag = f"[{el_type}]"
-                    title = item['title'][:45] + "..." if len(item['title']) > 45 else item['title']
+                        el_tag = "[❔]"
+                    title = item['title'][:43] + "..." if len(item['title']) > 43 else item['title']
                     print(f"  {i+1}. {el_tag} {title}")
                     print(f"      {item['file_path'][:60]}...")
                 
@@ -1087,11 +1086,11 @@ class Visionarr:
                 
                 processed_at = item.processed_at.strftime("%Y-%m-%d %H:%M")
                 if item.el_type == 'FEL_COMPLEX':
-                    el_tag = "[FEL ⚠️]"
-                elif item.el_type == 'FEL_SIMPLE':
-                    el_tag = "[FEL ✅]"
+                    el_tag = "[⚠️ UNSAFE]"
+                elif item.el_type in ('FEL_SIMPLE', 'MEL'):
+                    el_tag = "[✅ SAFE]"
                 else:
-                    el_tag = f"[{item.el_type}]"
+                    el_tag = "[❔]"
                 print(f"  {i+1}. {el_tag} {title}")
                 print(f"      Profile: {item.original_profile} -> {item.new_profile} | {processed_at} | Backup: {backup_status}")
             
@@ -1177,7 +1176,7 @@ class Visionarr:
             full_day = settings.get("full_scan_day", "sunday").capitalize()
             full_time = settings.get("full_scan_time", "03:00")
             fel_auto = settings.get("auto_process_fel", "false") == "true"
-            fel_status = "ON (Auto)" if fel_auto else "OFF (Manual Only)"
+            fel_status = "ON ⚠️" if fel_auto else "OFF (Skip Unsafe)"
             
             print("\n" + "=" * 50)
             print("           SETTINGS           ")
@@ -1187,7 +1186,7 @@ class Visionarr:
             print(f"  3. Delta Scan Interval: {delta_interval} min")
             print(f"  4. Full Scan Day: {full_day}")
             print(f"  5. Full Scan Time: {full_time}")
-            print(f"  6. Toggle FEL Auto-Processing: {fel_status}")
+            print(f"  6. Convert Unsafe (Complex FEL): {fel_status}")
             print("  7. ← Back")
             print("=" * 50)
             print("\nPress a number to select:")
@@ -1233,10 +1232,23 @@ class Visionarr:
             elif choice == "6":
                 new_val = "false" if fel_auto else "true"
                 self.state.set_setting("auto_process_fel", new_val)
-                print(f"\n✅ Profile 7 FEL Auto-Processing set to: {'ENABLED' if new_val == 'true' else 'DISABLED'}")
+                print("\n" + "=" * 50)
                 if new_val == "true":
-                    print("   ⚠️  Note: FEL files will now be auto-converted to Profile 8 (Lossy).")
+                    print("⚠️  UNSAFE FILE CONVERSION: ENABLED")
+                    print("=" * 50)
+                    print("Complex FEL files will now be auto-converted.")
+                    print("")
+                    print("These files use advanced Dolby Vision enhancement")
+                    print("layers that may result in quality loss when")
+                    print("converted to Profile 8.")
+                else:
+                    print("✅ UNSAFE FILE CONVERSION: DISABLED")
+                    print("=" * 50)
+                    print("Complex FEL files will be skipped during")
+                    print("automatic processing. You can still convert")
+                    print("them manually via the Manual Conversion menu.")
                 input("\nPress Enter to continue...")
+
             elif choice == "7":
                 break
     

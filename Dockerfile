@@ -38,6 +38,13 @@ RUN ARCH=$(dpkg --print-architecture) && \
     rm /tmp/dovi_tool.tar.gz && \
     dovi_tool --version
 
+# Install dovi_convert (wrapper by cryptochrome) - pinned version for stability
+ARG DOVI_CONVERT_VERSION=7.3.2
+RUN wget -q "https://raw.githubusercontent.com/cryptochrome/dovi_convert/v${DOVI_CONVERT_VERSION}/dovi_convert.py" \
+        -O /usr/local/bin/dovi_convert && \
+    chmod +x /usr/local/bin/dovi_convert && \
+    echo "dovi_convert v${DOVI_CONVERT_VERSION} installed"
+
 # Create mount point directories
 RUN mkdir -p /config /temp /movies /tv
 

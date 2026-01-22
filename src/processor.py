@@ -82,7 +82,7 @@ class Processor:
     
     def _verify_tools(self) -> None:
         """Verify all required CLI tools are available."""
-        tools = ["mediainfo", "ffmpeg", "mkvmerge", "dovi_tool"]
+        tools = ["mediainfo", "ffmpeg", "mkvmerge", "dovi_tool", "dovi_convert"]
         missing = []
         
         for tool in tools:
@@ -92,7 +92,7 @@ class Processor:
         if missing:
             raise ProcessorError(f"Missing required tools: {', '.join(missing)}")
         
-        logger.info("All required tools verified: mediainfo, ffmpeg, mkvmerge, dovi_tool")
+        logger.info("All required tools verified: mediainfo, ffmpeg, mkvmerge, dovi_tool, dovi_convert")
     
     def _run_command(
         self,
@@ -121,6 +121,68 @@ class Processor:
             raise ProcessorError(f"{description} timed out after 1 hour")
         except Exception as e:
             raise ProcessorError(f"{description} error: {e}")
+
+    def _run_dovi_convert(
+        self,
+        args: list,
+        timeout: int = 7200
+    ) -> subprocess.CompletedProcess:
+        """
+        Run dovi_convert CLI command.
+        
+        Uses cryptochrome's dovi_convert for FEL detection and conversion.
+        """
+        cmd = ["dovi_convert"] + args
+        logger.debug(f"Running: {' '.join(cmd)}")
+        
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout
+            )
+            return result
+        except subprocess.TimeoutExpired:
+            raise ProcessorError(f"dovi_convert timed out after {timeout}s")
+        except Exception as e:
+            raise ProcessorError(f"dovi_convert error: {e}")
+
+    def _parse_dovi_convert_scan(self, output: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Parse dovi_convert -scan output to extract verdict and reason.
+        
+        Returns (verdict, reason):
+        - verdict: "SAFE", "COMPLEX", "SKIP", "ERROR", or None
+        - reason: Human-readable reason string
+        """
+        # dovi_convert outputs table format with columns:
+        # Filename | Format | Action
+        # For analysis: look for patterns in output
+        
+        output_lower = output.lower()
+        
+        # Check for MEL (always safe)
+        if "mel" in output_lower and "safe" in output_lower:
+            return ("SAFE", "MEL detected")
+        
+        # Check for Simple FEL
+        if "simple" in output_lower or ("fel" in output_lower and "safe" in output_lower):
+            return ("SAFE", "Simple FEL")
+        
+        # Check for Complex FEL
+        if "complex" in output_lower or "skip" in output_lower:
+            return ("COMPLEX", "Complex FEL detected")
+        
+        # Check for Profile 8 (already converted)
+        if "profile 8" in output_lower or "8.1" in output_lower:
+            return ("SKIP", "Already Profile 8")
+        
+        # Check for non-DoVi
+        if "hdr10" in output_lower or "sdr" in output_lower:
+            return ("SKIP", "Not Dolby Vision")
+        
+        return (None, "Could not parse dovi_convert output")
     
     def _preallocate_file(self, file_path: Path, size_bytes: int) -> None:
         """
@@ -266,163 +328,37 @@ class Processor:
 
     def _check_fel_complexity(self, file_path: Path) -> bool:
         """
-        Analyze RPU to detect Complex FEL.
+        Analyze file to detect Complex FEL using dovi_convert.
         
-        Adapted from cryptochrome/dovi_convert.
-        
-        Checks L1 brightness expansion at 10 sample points.
+        Delegates to cryptochrome's dovi_convert for detection.
         Returns True if complex (unsafe), False if simple (safe).
         """
-        import uuid
-        import time
-        import os
-
-        # 1. Determine probe points
-        duration_ms = self._get_duration_ms(file_path)
-
-        if duration_ms < 10000:
-            timestamps = [0]
-        else:
-            dur_sec = duration_ms // 1000
-            # Probe at 10 points (5% to 95%)
-            timestamps = [
-                int(dur_sec * 0.05), int(dur_sec * 0.15), int(dur_sec * 0.25),
-                int(dur_sec * 0.35), int(dur_sec * 0.45), int(dur_sec * 0.55),
-                int(dur_sec * 0.65), int(dur_sec * 0.75), int(dur_sec * 0.85),
-                int(dur_sec * 0.95)
-            ]
-
-        # 2. Get base layer peak
-        bl_peak, is_default = self._get_bl_peak_nits(file_path)
-        threshold = bl_peak + 50
-
-        logger.debug(f"Base layer peak: {bl_peak} nits (default={is_default}), threshold: {threshold}")
-
-        complex_signal = False
-        probe_count = 0
-
-        for t in timestamps:
-            # Create temp files
-            temp_hevc = self.temp_dir / f"probe_{t}_{int(time.time())}_{os.getpid()}.hevc"
-            temp_rpu = temp_hevc.with_suffix(".rpu")
-            temp_json = temp_hevc.with_suffix(".json")
-
-            try:
-                # Extract 1 second of HEVC
-                ffmpeg_cmd = [
-                    "ffmpeg", "-y", "-v", "error",
-                    "-analyzeduration", "100M", "-probesize", "100M",
-                    "-ss", str(t), "-i", str(file_path),
-                    "-map", "0:v:0", "-c:v", "copy", "-an", "-sn", "-dn",
-                    "-bsf:v", "hevc_mp4toannexb", "-f", "hevc", "-t", "1",
-                    str(temp_hevc)
-                ]
-
-                try:
-                    subprocess.run(
-                        ffmpeg_cmd,
-                        capture_output=True,
-                        stdin=subprocess.DEVNULL,
-                        timeout=60
-                    )
-                except Exception as e:
-                    logger.debug(f"probe ffmpeg exception @ {t}s: {e}")
-                    continue
-
-                if not temp_hevc.exists() or temp_hevc.stat().st_size == 0:
-                    continue
-
-                # Extract RPU
-                try:
-                    subprocess.run(
-                        ["dovi_tool", "extract-rpu", str(temp_hevc), "-o", str(temp_rpu)],
-                        capture_output=True,
-                        timeout=60
-                    )
-                except Exception as e:
-                    logger.debug(f"probe dovi_tool extract-rpu exception: {e}")
-
-                # Clean up HEVC immediately
-                if temp_hevc.exists():
-                    temp_hevc.unlink()
-
-                if not temp_rpu.exists() or temp_rpu.stat().st_size == 0:
-                    continue
-
-                # Export to JSON
-                try:
-                    subprocess.run(
-                        ["dovi_tool", "export", "-i", str(temp_rpu), "-d", f"all={temp_json}"],
-                        capture_output=True,
-                        timeout=60
-                    )
-                except Exception as e:
-                    logger.debug(f"probe dovi_tool export exception: {e}")
-
-                # Clean up RPU immediately
-                if temp_rpu.exists():
-                    temp_rpu.unlink()
-
-                if not temp_json.exists() or temp_json.stat().st_size == 0:
-                    if temp_json.exists():
-                        temp_json.unlink()
-                    continue
-
-                probe_count += 1
-
-                # Check for MEL - early return if found
-                try:
-                    json_content = temp_json.read_text()
-                    if '"el_type":"MEL"' in json_content or '"el_type": "MEL"' in json_content:
-                        logger.info("Minimal Enhancement Layer (MEL) detected - safe to convert")
-                        if temp_json.exists():
-                            temp_json.unlink()
-                        return False  # MEL is always safe
-
-                    # Extract L1 max
-                    l1_max = self._extract_l1_max(json_content)
-
-                    if l1_max is not None:
-                        l1_nits = self._pq_to_nits(l1_max)
-                        logger.debug(f"Probe @ {t}s: L1={l1_max} -> {l1_nits} nits vs threshold={threshold}")
-
-                        if l1_nits > threshold:
-                            complex_signal = True
-                            logger.info(f"Active reconstruction detected (L1: {l1_nits} nits > BL: {bl_peak} nits @ {t}s)")
-                            if temp_json.exists():
-                                temp_json.unlink()
-                            break
-
-                except Exception as e:
-                    logger.debug(f"Probe @ {t}s: Error parsing JSON: {e}")
-
-                if temp_json.exists():
-                    temp_json.unlink()
-
-            finally:
-                # Final cleanup for any remaining files
-                for p in [temp_hevc, temp_rpu, temp_json]:
-                    if p.exists():
-                        try:
-                            p.unlink()
-                        except OSError:
-                            pass
-
-        if probe_count == 0:
-            logger.warning("Extraction failed (no probes succeeded), assuming complex")
-            return True  # Default to Complex if we can't read it
-
-        # Require at least 50% of probes to succeed for reliable verdict
-        min_required = max(1, len(timestamps) // 2)
-        if not complex_signal and probe_count < min_required:
-            logger.warning(f"Insufficient data ({probe_count}/{len(timestamps)} probes succeeded), assuming complex")
-            return True  # Default to Complex if data is unreliable
-
-        if complex_signal:
-            return True
-        else:
-            logger.info("Static / Simple FEL detected - safe to convert")
-            return False
+        logger.debug(f"Running dovi_convert -scan on {file_path.name}")
+        
+        try:
+            result = self._run_dovi_convert(["-scan", str(file_path)], timeout=300)
+            
+            # Log the output for debugging
+            output = result.stdout + result.stderr
+            logger.debug(f"dovi_convert -scan output: {output[:500]}")
+            
+            # Parse the result
+            verdict, reason = self._parse_dovi_convert_scan(output)
+            
+            if verdict == "SAFE":
+                logger.info(f"dovi_convert verdict: SAFE ({reason})")
+                return False  # Not complex, safe to convert
+            elif verdict == "COMPLEX":
+                logger.info(f"dovi_convert verdict: COMPLEX ({reason})")
+                return True  # Complex FEL, unsafe
+            else:
+                # Unknown or skip - default to complex for safety
+                logger.warning(f"dovi_convert verdict unclear: {reason}")
+                return True
+                
+        except ProcessorError as e:
+            logger.warning(f"dovi_convert scan failed: {e}, assuming complex")
+            return True  # Default to complex on error
 
     # -------------------------------------------------------------------------
     # Detection
@@ -954,119 +890,62 @@ class Processor:
 
     def convert_to_profile8(self, file_path: Path, force_backup: bool = False) -> Path:
         """
-        Convert a Profile 7 MKV to Profile 8.
-
-        Uses dovi_convert's pipeline with automatic fallback:
-        1. Try pipe-based turbo mode (fast)
-        2. On stream error, fallback to safe mode (disk extraction)
-        3. Mux with preserved metadata (delay, language, track name)
-        4. Verify frame count before swap
-
-        Adapted from cryptochrome/dovi_convert.
-
+        Convert a Profile 7 MKV to Profile 8 using dovi_convert.
+        
+        Delegates conversion to cryptochrome's dovi_convert which handles:
+        - Turbo mode (pipe-based) with safe mode fallback
+        - Metadata preservation (delay, language, track name)
+        - Frame count verification
+        
         Args:
             file_path: Path to the MKV file to convert
             force_backup: If True, keep backup regardless of backup_enabled setting
 
         Returns the path to the converted file.
         """
-        logger.info(f"Starting Profile 7 → 8 conversion: {file_path}")
-
-        # Get video info for metadata preservation
-        video_info = self._get_video_info(file_path)
-        fps = self._get_fps(file_path)
-        if not fps:
-            logger.warning("Could not detect frame rate, using default")
-            fps = "23.976"
-
-        work_dir = self.temp_dir / f"convert_{file_path.stem}_{os.getpid()}"
-        work_dir.mkdir(parents=True, exist_ok=True)
-
+        logger.info(f"Starting Profile 7 → 8 conversion via dovi_convert: {file_path}")
+        
+        # Determine backup path (dovi_convert creates .mkv.bak.dovi_convert by default)
+        dovi_backup = file_path.with_suffix(".mkv.bak.dovi_convert")
+        our_backup = file_path.with_suffix(".mkv.original")
+        
         try:
-            hevc_p8_path = work_dir / "video_p8.hevc"
-            output_partial = file_path.with_suffix(".mkv.partial")
-            output_backup = file_path.with_suffix(".mkv.original")
-
-            # Pre-allocate for Unraid cache safety
-            source_size = file_path.stat().st_size
-            estimated_hevc_size = int(source_size * 0.8)
-            self._preallocate_file(hevc_p8_path, estimated_hevc_size)
-
-            # Step 1: Convert - try turbo mode first, fallback to safe mode
-            logger.info("Step 1/3: Converting to Profile 8...")
-
-            turbo_res, fail_reason = self._convert_turbo(file_path, hevc_p8_path)
-
-            if turbo_res != 0:
-                if fail_reason == "CRITICAL":
-                    raise ProcessorError("Critical error: disk full or permission denied")
-
-                if fail_reason == "STREAM_ERROR":
-                    logger.info("Turbo mode failed (stream error), falling back to safe mode...")
-                    safe_res = self._convert_safe(file_path, hevc_p8_path, video_info)
-                    if safe_res != 0:
-                        raise ProcessorError("Both turbo and safe mode conversion failed")
-                else:
-                    raise ProcessorError(f"Conversion failed: {fail_reason}")
-
-            # Step 2: Remux with original audio/subtitles and preserved metadata
-            logger.info("Step 2/3: Remuxing final MKV...")
-
-            mux_args = ["-o", str(output_partial)]
-
-            # Preserve video delay if present
-            if video_info and video_info.get("delay", 0) != 0:
-                mux_args.extend(["--sync", f"0:{video_info['delay']}"])
-
-            # Set frame rate
-            mux_args.extend(["--default-duration", f"0:{fps}fps"])
-
-            # Preserve language
-            lang = video_info.get("language", "und") if video_info else "und"
-            mux_args.extend(["--language", f"0:{lang}"])
-
-            # Preserve track name
-            if video_info and video_info.get("name"):
-                mux_args.extend(["--track-name", f"0:{video_info['name']}"])
-
-            mux_args.append(str(hevc_p8_path))
-            mux_args.extend(["--no-video", str(file_path)])
-
-            self._run_command(["mkvmerge"] + mux_args, "MKV remux")
-
-            # Step 3: Verify conversion
-            logger.info("Step 3/3: Verifying conversion...")
-            if not self._verify_conversion(file_path, output_partial):
-                raise ProcessorError("Frame count verification failed")
-
-            # Atomic swap
-            logger.info("Performing atomic file swap...")
-
+            # Run dovi_convert -convert (handles muxing, verification, backup internally)
+            result = self._run_dovi_convert(["-convert", str(file_path)], timeout=7200)
+            
+            # Check for success
+            output = result.stdout + result.stderr
+            logger.debug(f"dovi_convert -convert output: {output[:1000]}")
+            
+            if result.returncode != 0:
+                raise ProcessorError(f"dovi_convert -convert failed: {output[:500]}")
+            
+            # dovi_convert creates backup at .mkv.bak.dovi_convert
+            # Rename to our backup format if needed
             should_backup = self.backup_enabled or force_backup
-            if should_backup:
-                shutil.move(str(file_path), str(output_backup))
-                if force_backup and not self.backup_enabled:
-                    logger.info(f"Original backed up (Complex FEL safety): {output_backup}")
+            if dovi_backup.exists():
+                if should_backup:
+                    # Rename to our format
+                    if our_backup.exists():
+                        our_backup.unlink()  # Remove old backup if exists
+                    shutil.move(str(dovi_backup), str(our_backup))
+                    if force_backup and not self.backup_enabled:
+                        logger.info(f"Original backed up (Complex FEL safety): {our_backup}")
+                    else:
+                        logger.info(f"Original backed up to: {our_backup}")
                 else:
-                    logger.info(f"Original backed up to: {output_backup}")
-            else:
-                file_path.unlink()
-
-            shutil.move(str(output_partial), str(file_path))
+                    # User doesn't want backup, delete it
+                    dovi_backup.unlink()
+                    logger.info("Backup deleted (backup disabled)")
+            
             logger.info(f"Conversion complete: {file_path}")
-
             return file_path
-
+            
+        except ProcessorError:
+            raise
         except Exception as e:
             logger.error(f"Conversion failed: {e}")
-            if output_partial.exists():
-                output_partial.unlink()
-            raise
-
-        finally:
-            # Clean up work directory
-            if work_dir.exists():
-                shutil.rmtree(work_dir, ignore_errors=True)
+            raise ProcessorError(f"Conversion failed: {e}")
     
     def check_disk_space(self, file_path: Path, multiplier: float = 1.5) -> bool:
         """

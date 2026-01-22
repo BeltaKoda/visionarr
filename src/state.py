@@ -24,6 +24,7 @@ class ProcessedFile:
     new_profile: str
     processed_at: datetime
     file_size_bytes: int
+    el_type: str = "UNKNOWN"
 
 
 @dataclass
@@ -53,6 +54,7 @@ class StateDB:
                     file_path TEXT UNIQUE NOT NULL,
                     original_profile TEXT NOT NULL,
                     new_profile TEXT NOT NULL,
+                    el_type TEXT DEFAULT 'UNKNOWN',
                     processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     file_size_bytes INTEGER NOT NULL
                 );
@@ -69,6 +71,7 @@ class StateDB:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     file_path TEXT UNIQUE NOT NULL,
                     title TEXT NOT NULL,
+                    el_type TEXT DEFAULT 'UNKNOWN',
                     discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 
@@ -77,6 +80,7 @@ class StateDB:
                     file_path TEXT UNIQUE NOT NULL,
                     has_dovi BOOLEAN NOT NULL,
                     dovi_profile TEXT,
+                    el_type TEXT DEFAULT 'UNKNOWN',
                     file_size_bytes INTEGER NOT NULL,
                     scanned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
@@ -98,7 +102,32 @@ class StateDB:
                 CREATE INDEX IF NOT EXISTS idx_discovered_path ON discovered_files(file_path);
                 CREATE INDEX IF NOT EXISTS idx_scanned_path ON scanned_files(file_path);
             """)
+            
+            # Migration: Add el_type column if missing (for existing databases)
+            self._migrate_discovered_files_el_type(conn)
+            self._migrate_processed_files_el_type(conn)
+            self._migrate_scanned_files_el_type(conn)
 
+    def _migrate_discovered_files_el_type(self, conn: sqlite3.Connection) -> None:
+        """Add el_type column to discovered_files if it doesn't exist (migration)."""
+        cursor = conn.execute("PRAGMA table_info(discovered_files)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "el_type" not in columns:
+            conn.execute("ALTER TABLE discovered_files ADD COLUMN el_type TEXT DEFAULT 'UNKNOWN'")
+
+    def _migrate_processed_files_el_type(self, conn: sqlite3.Connection) -> None:
+        """Add el_type column to processed_files if it doesn't exist (migration)."""
+        cursor = conn.execute("PRAGMA table_info(processed_files)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "el_type" not in columns:
+            conn.execute("ALTER TABLE processed_files ADD COLUMN el_type TEXT DEFAULT 'UNKNOWN'")
+
+    def _migrate_scanned_files_el_type(self, conn: sqlite3.Connection) -> None:
+        """Add el_type column to scanned_files if it doesn't exist (migration)."""
+        cursor = conn.execute("PRAGMA table_info(scanned_files)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "el_type" not in columns:
+            conn.execute("ALTER TABLE scanned_files ADD COLUMN el_type TEXT DEFAULT 'UNKNOWN'")
 
     
     @contextmanager
@@ -126,6 +155,7 @@ class StateDB:
         "delta_scan_interval": "30",      # minutes
         "full_scan_day": "sunday",        # day name
         "full_scan_time": "03:00",        # HH:MM
+        "auto_process_fel": "false",      # true, false
     }
     
     def _init_settings_defaults(self) -> None:
@@ -178,15 +208,16 @@ class StateDB:
         file_path: str,
         original_profile: str,
         new_profile: str,
-        file_size_bytes: int
+        file_size_bytes: int,
+        el_type: str = "UNKNOWN"
     ) -> None:
         """Mark a file as successfully processed."""
         with self._get_connection() as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO processed_files 
-                (file_path, original_profile, new_profile, file_size_bytes, processed_at)
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-            """, (file_path, original_profile, new_profile, file_size_bytes))
+                (file_path, original_profile, new_profile, el_type, file_size_bytes, processed_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """, (file_path, original_profile, new_profile, el_type, file_size_bytes))
             
             # Remove from failed if it was there
             conn.execute("DELETE FROM failed_files WHERE file_path = ?", (file_path,))
@@ -195,7 +226,7 @@ class StateDB:
         """Get list of processed files, most recent first."""
         with self._get_connection() as conn:
             cursor = conn.execute("""
-                SELECT id, file_path, original_profile, new_profile, processed_at, file_size_bytes
+                SELECT id, file_path, original_profile, new_profile, el_type, processed_at, file_size_bytes
                 FROM processed_files
                 ORDER BY processed_at DESC
                 LIMIT ?
@@ -207,6 +238,7 @@ class StateDB:
                     file_path=row["file_path"],
                     original_profile=row["original_profile"],
                     new_profile=row["new_profile"],
+                    el_type=row["el_type"],
                     processed_at=datetime.fromisoformat(row["processed_at"]),
                     file_size_bytes=row["file_size_bytes"]
                 )
@@ -401,25 +433,58 @@ class StateDB:
 
     # ==================== Discovered Files Methods ====================
     
-    def add_discovered(self, file_path: str, title: str) -> bool:
+    def add_discovered(self, file_path: str, title: str, el_type: str = "UNKNOWN") -> bool:
         """Add a discovered Profile 7 file. Returns True if new, False if already exists."""
         with self._get_connection() as conn:
             try:
                 conn.execute(
-                    "INSERT OR IGNORE INTO discovered_files (file_path, title) VALUES (?, ?)",
-                    (file_path, title)
+                    "INSERT OR IGNORE INTO discovered_files (file_path, title, el_type) VALUES (?, ?, ?)",
+                    (file_path, title, el_type)
                 )
                 return conn.total_changes > 0
             except sqlite3.Error:
                 return False
 
+    def update_discovered_el_type(self, file_path: str, el_type: str) -> bool:
+        """Update the EL type for an existing discovered file."""
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE discovered_files SET el_type = ? WHERE file_path = ?",
+                (el_type, file_path)
+            )
+            return conn.total_changes > 0
+
     def get_discovered(self) -> List[dict]:
         """Get all discovered Profile 7 files not yet processed."""
         with self._get_connection() as conn:
             rows = conn.execute("""
-                SELECT d.id, d.file_path, d.title, d.discovered_at
+                SELECT d.id, d.file_path, d.title, d.el_type, d.discovered_at
                 FROM discovered_files d
                 WHERE d.file_path NOT IN (SELECT file_path FROM processed_files)
+                ORDER BY d.discovered_at DESC
+            """).fetchall()
+            return [dict(row) for row in rows]
+
+    def get_mel_files(self) -> List[dict]:
+        """Get discovered safe Profile 7 files (MEL or Simple FEL)."""
+        with self._get_connection() as conn:
+            rows = conn.execute("""
+                SELECT d.id, d.file_path, d.title, d.el_type, d.discovered_at
+                FROM discovered_files d
+                WHERE d.el_type IN ('MEL', 'FEL_SIMPLE')
+                AND d.file_path NOT IN (SELECT file_path FROM processed_files)
+                ORDER BY d.discovered_at DESC
+            """).fetchall()
+            return [dict(row) for row in rows]
+
+    def get_fel_files(self) -> List[dict]:
+        """Get discovered unsafe Profile 7 files (Complex FEL)."""
+        with self._get_connection() as conn:
+            rows = conn.execute("""
+                SELECT d.id, d.file_path, d.title, d.el_type, d.discovered_at
+                FROM discovered_files d
+                WHERE d.el_type = 'FEL_COMPLEX'
+                AND d.file_path NOT IN (SELECT file_path FROM processed_files)
                 ORDER BY d.discovered_at DESC
             """).fetchall()
             return [dict(row) for row in rows]
@@ -448,7 +513,7 @@ class StateDB:
 
     # ==================== Scanned Files Methods ====================
     
-    def add_scanned(self, file_path: str, has_dovi: bool, dovi_profile: Optional[str], file_size_bytes: int) -> bool:
+    def add_scanned(self, file_path: str, has_dovi: bool, dovi_profile: Optional[str], file_size_bytes: int, el_type: str = "UNKNOWN") -> bool:
         """
         Record a scanned file with its DoVi profile status.
         Returns True if new record, False if already existed (updated).
@@ -457,9 +522,9 @@ class StateDB:
             try:
                 conn.execute("""
                     INSERT OR REPLACE INTO scanned_files 
-                    (file_path, has_dovi, dovi_profile, file_size_bytes, scanned_at)
-                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                """, (file_path, has_dovi, dovi_profile, file_size_bytes))
+                    (file_path, has_dovi, dovi_profile, el_type, file_size_bytes, scanned_at)
+                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """, (file_path, has_dovi, dovi_profile, el_type, file_size_bytes))
                 return True
             except Exception:
                 return False
@@ -472,6 +537,15 @@ class StateDB:
                 (file_path,)
             ).fetchone()
             return result is not None
+
+    def get_scanned_file(self, file_path: str) -> Optional[dict]:
+        """Get scan details for a specific file."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT has_dovi, dovi_profile, el_type, file_size_bytes, scanned_at FROM scanned_files WHERE file_path = ?",
+                (file_path,)
+            ).fetchone()
+            return dict(row) if row else None
 
     def get_all_scanned_paths(self) -> set:
         """

@@ -50,6 +50,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code and entrypoint
 COPY src/ ./src/
+
+# Install dovi_convert as a library
+RUN mkdir -p src/lib && \
+    wget -q "https://github.com/cryptochrome/dovi_convert/releases/download/v7.3.2/dovi_convert.py" -O src/lib/dovi_convert.py && \
+    touch src/lib/__init__.py
+
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

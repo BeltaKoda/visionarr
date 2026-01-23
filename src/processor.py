@@ -549,95 +549,50 @@ class Processor:
 
     def _detect_el_type(self, file_path: Path) -> ELType:
         """
-        Detect Enhancement Layer type (FEL vs MEL) for Profile 7 files.
-
-        Uses dovi_tool extract-rpu + export to get JSON with el_type field.
-        Falls back to MEL if detection fails (most releases are MEL).
+        Detect Enhancement Layer type using dovi_convert -scan.
+        
+        dovi_convert analyzes the file and determines MEL/FEL/Complex status.
         """
-        import uuid
-
-        # Try with short sample first (fast), then longer if needed
-        for duration in [5, 30]:
-            try:
-                rpu_path = self.temp_dir / f"rpu_{uuid.uuid4().hex}.bin"
-                json_path = self.temp_dir / f"rpu_{uuid.uuid4().hex}.json"
-
-                try:
-                    # Pipe ffmpeg to dovi_tool extract-rpu (no temp video file)
-                    ffmpeg_cmd = [
-                        "ffmpeg", "-v", "error", "-y",
-                        "-i", str(file_path),
-                        "-c:v", "copy",
-                        "-bsf:v", "hevc_mp4toannexb",
-                        "-f", "hevc",
-                        "-t", str(duration),
-                        "-"
-                    ]
-
-                    dovi_cmd = ["dovi_tool", "extract-rpu", "-", "-o", str(rpu_path)]
-
-                    # Run piped: ffmpeg | dovi_tool
-                    ffmpeg_proc = subprocess.Popen(
-                        ffmpeg_cmd,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE
-                    )
-                    dovi_proc = subprocess.Popen(
-                        dovi_cmd,
-                        stdin=ffmpeg_proc.stdout,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE
-                    )
-                    ffmpeg_proc.stdout.close()
-                    dovi_proc.communicate(timeout=300)
-
-                    if dovi_proc.returncode != 0 or not rpu_path.exists():
-                        continue  # Try next duration
-
-                    # Export RPU to JSON
-                    export_result = subprocess.run(
-                        ["dovi_tool", "export", "-i", str(rpu_path), "-d", f"all={json_path}"],
-                        capture_output=True, text=True, timeout=60
-                    )
-
-                    if export_result.returncode != 0 or not json_path.exists():
-                        continue
-
-                    # Parse JSON for el_type
-                    with open(json_path, 'r') as f:
-                        content = f.read()
-
-                    if '"el_type":"FEL"' in content or '"el_type": "FEL"' in content:
-                        # FEL detected - check complexity to determine if safe
-                        is_complex = self._check_fel_complexity(file_path)
-                        if is_complex:
-                            logger.info(f"Detected Complex FEL: {file_path.name}")
-                            return ELType.FEL_COMPLEX
-                        else:
-                            logger.info(f"Detected Simple FEL (safe): {file_path.name}")
-                            return ELType.FEL_SIMPLE
-                    elif '"el_type":"MEL"' in content or '"el_type": "MEL"' in content:
-                        logger.info(f"Detected MEL (Minimal Enhancement Layer): {file_path.name}")
-                        return ELType.MEL
-
-                    # el_type not in JSON - try next duration for more data
-
-                finally:
-                    # Clean up temp files
-                    for p in [rpu_path, json_path]:
-                        if p.exists():
-                            try:
-                                p.unlink()
-                            except OSError:
-                                pass
-
-            except Exception as e:
-                logger.debug(f"EL detection attempt failed (duration={duration}s): {e}")
-                continue
-
-        # All attempts failed - default to MEL (most releases are MEL)
-        logger.warning(f"EL type detection failed for {file_path.name}, assuming MEL")
-        return ELType.MEL
+        logger.debug(f"Running dovi_convert -scan for EL detection: {file_path.name}")
+        
+        try:
+            result = self._run_dovi_convert(["-scan", str(file_path)], timeout=300)
+            
+            output = result.stdout + result.stderr
+            logger.debug(f"dovi_convert -scan output: {output[:500]}")
+            
+            output_lower = output.lower()
+            
+            # Parse dovi_convert output for EL type
+            # dovi_convert uses terms like: MEL, FEL (Simple), FEL (Complex), etc.
+            
+            # Check for MEL
+            if "mel" in output_lower:
+                logger.info(f"Detected MEL: {file_path.name}")
+                return ELType.MEL
+            
+            # Check for Simple FEL (safe to convert)
+            if "simple" in output_lower or ("fel" in output_lower and "convert" in output_lower):
+                logger.info(f"Detected Simple FEL (safe): {file_path.name}")
+                return ELType.FEL_SIMPLE
+            
+            # Check for Complex FEL (unsafe)
+            if "complex" in output_lower or "skip" in output_lower:
+                logger.info(f"Detected Complex FEL: {file_path.name}")
+                return ELType.FEL_COMPLEX
+            
+            # Check for Profile 7 FEL without explicit complexity (default to simple)
+            if "fel" in output_lower or "profile 7" in output_lower:
+                logger.info(f"Detected FEL (assuming simple): {file_path.name}")
+                return ELType.FEL_SIMPLE
+            
+            # Default to MEL if nothing detected (most releases are MEL)
+            logger.warning(f"Could not determine EL type for {file_path.name}, assuming MEL")
+            return ELType.MEL
+            
+        except ProcessorError as e:
+            logger.warning(f"EL detection failed for {file_path.name}: {e}, assuming MEL")
+            return ELType.MEL
     
     # -------------------------------------------------------------------------
     # Conversion

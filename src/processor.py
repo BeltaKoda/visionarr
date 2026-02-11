@@ -150,7 +150,7 @@ class Processor:
 
     def _parse_dovi_convert_scan(self, output: str) -> Tuple[Optional[str], Optional[str]]:
         """
-        Parse dovi_convert -scan output to extract verdict and reason.
+        Parse dovi_convert scan output to extract verdict and reason.
         
         Returns (verdict, reason):
         - verdict: "SAFE", "COMPLEX", "SKIP", "ERROR", or None
@@ -333,14 +333,14 @@ class Processor:
         Delegates to cryptochrome's dovi_convert for detection.
         Returns True if complex (unsafe), False if simple (safe).
         """
-        logger.debug(f"Running dovi_convert -scan on {file_path.name}")
+        logger.debug(f"Running dovi_convert scan on {file_path.name}")
         
         try:
-            result = self._run_dovi_convert(["-scan", str(file_path)], timeout=300)
+            result = self._run_dovi_convert(["scan", str(file_path)], timeout=300)
             
             # Log the output for debugging
             output = result.stdout + result.stderr
-            logger.debug(f"dovi_convert -scan output: {output[:500]}")
+            logger.debug(f"dovi_convert scan output: {output[:500]}")
             
             # Parse the result
             verdict, reason = self._parse_dovi_convert_scan(output)
@@ -549,17 +549,17 @@ class Processor:
 
     def _detect_el_type(self, file_path: Path) -> ELType:
         """
-        Detect Enhancement Layer type using dovi_convert -scan.
+        Detect Enhancement Layer type using dovi_convert scan.
         
         dovi_convert analyzes the file and determines MEL/FEL/Complex status.
         """
-        logger.debug(f"Running dovi_convert -scan for EL detection: {file_path.name}")
+        logger.debug(f"Running dovi_convert scan for EL detection: {file_path.name}")
         
         try:
-            result = self._run_dovi_convert(["-scan", str(file_path)], timeout=300)
+            result = self._run_dovi_convert(["scan", str(file_path)], timeout=300)
             
             output = result.stdout + result.stderr
-            logger.debug(f"dovi_convert -scan output: {output[:500]}")
+            logger.debug(f"dovi_convert scan output: {output[:500]}")
             
             output_lower = output.lower()
             
@@ -865,15 +865,15 @@ class Processor:
         our_backup = file_path.with_suffix(".mkv.original")
         
         try:
-            # Run dovi_convert -convert (handles muxing, verification, backup internally)
-            result = self._run_dovi_convert(["-convert", str(file_path)], timeout=7200)
+            # Run dovi_convert convert (handles muxing, verification, backup internally)
+            result = self._run_dovi_convert(["convert", str(file_path)], timeout=7200)
             
             # Check for success
             output = result.stdout + result.stderr
-            logger.debug(f"dovi_convert -convert output: {output[:1000]}")
+            logger.debug(f"dovi_convert convert output: {output[:1000]}")
             
             if result.returncode != 0:
-                raise ProcessorError(f"dovi_convert -convert failed: {output[:500]}")
+                raise ProcessorError(f"dovi_convert convert failed: {output[:500]}")
             
             # dovi_convert creates backup at .mkv.bak.dovi_convert
             # Rename to our backup format if needed
